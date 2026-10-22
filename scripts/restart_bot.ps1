@@ -14,8 +14,11 @@
 # The script never throws (non-interactive context); everything lands in logs/restart.log.
 
 $ErrorActionPreference = "SilentlyContinue"
-$log = "D:\cs2-qq-bot\logs\restart.log"
-$botLog = "D:\cs2-qq-bot\logs\bot.log"
+# V0.3.26: paths are derived from this script's own location, so a clone in any
+# folder (home machine / another drive) works without editing the file.
+$root = Split-Path -Parent $PSScriptRoot
+$log = Join-Path $root "logs\restart.log"
+$botLog = Join-Path $root "logs\bot.log"
 $task = "CS2QQBot"
 
 function Write-ReLog($msg) {

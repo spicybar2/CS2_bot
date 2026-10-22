@@ -4,7 +4,7 @@ rem  Stop the bot and export state (watchlist + push_groups).
 rem  Run this BEFORE switching to the other machine.
 rem  Then copy data\state_export.json to the other machine.
 rem ============================================================
-cd /d "D:\cs2-qq-bot"
+cd /d "%~dp0"
 
 echo [1/2] Stopping bot process ...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*main.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host ('Killed PID ' + $_.ProcessId) }"

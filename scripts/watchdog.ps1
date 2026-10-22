@@ -6,8 +6,10 @@
 # so any non-ASCII literal here would land in watchdog.log as mojibake (documented pitfall #8).
 
 $ErrorActionPreference = "SilentlyContinue"
-$log = "D:\cs2-qq-bot\logs\watchdog.log"
-$botLog = "D:\cs2-qq-bot\logs\bot.log"
+# V0.3.26: paths derived from this script's location (works for any clone folder).
+$root = Split-Path -Parent $PSScriptRoot
+$log = Join-Path $root "logs\watchdog.log"
+$botLog = Join-Path $root "logs\bot.log"
 $staleMinutes = 15
 
 function Write-WdLog($msg) {

@@ -94,3 +94,23 @@ D:\cs2-qq-bot\
 1. 改代码 → 升版本号 → `更新日志.md` 置顶新条目 → 同步 `SKILL.md` → 写当日记忆。
 2. 重启只走 `scripts\restart_bot_hidden.vbs`，重启后核对：401=0、假漂移冷却=0、换钉=0、ERROR=0。
 3. 每次改动都必须有自测；测试全绿再上线。
+
+## 八、版本管理与在家部署
+
+完整操作步骤见 **`docs/部署与同步.md`**，这里是速查。
+
+| 场景 | 命令 |
+|---|---|
+| 本机改完上传 | `scripts\push.bat "说明"`（等于 add -A + commit + push） |
+| 家里首次部署 | `git clone <仓库>` → `scripts\setup_home.bat` → 填 `config.yaml` → `scripts\register_tasks.bat` |
+| 家里更新并重启 | `scripts\update_and_restart.bat`（pull --ff-only + 重启） |
+| 迁移关注/推送群 | 旧机 `stop_and_export.bat` → `data\state_export.json` 拷到新机 → `import_and_start.bat` |
+
+**收藏三条铁律**
+
+1. `config.yaml`（token/密钥）**永不入库**；`data/`、`logs/`、`archive/`、`.venv/` 同样不入库。
+2. **同一时间只让一台机器在线**：同 AppID 互相顶号、同 token 分限流、CSQAQ 还有 IP 白名单（换网络就 401）。
+3. 运维脚本一律 **ASCII-only**（PowerShell 5.1 会把无 BOM 的 UTF-8 当 GBK 解析），且**只用相对路径**
+   （`$PSScriptRoot` / `%~dp0` / `WScript.ScriptFullName`），否则克隆到别的目录就起不来。
+
+当前状态：`main` 分支，首个提交 tag `v0.3.25`，102 个文件 / 1.27 MB；`.gitignore` 已挡住全部敏感与运行时产物。

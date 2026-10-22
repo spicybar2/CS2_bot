@@ -5,7 +5,7 @@ rem  Run this AFTER switching to this machine.
 rem  Make sure  data\state_export.json  exists (from the other
 rem  machine's stop_and_export.bat), then double-click this file.
 rem ============================================================
-cd /d "D:\cs2-qq-bot"
+cd /d "%~dp0"
 
 echo [1/3] Stopping any running bot (avoid double instance) ...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*main.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"

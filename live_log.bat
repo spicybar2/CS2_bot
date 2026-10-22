@@ -5,12 +5,12 @@ rem see V0.3.6 freeze fix). This window is READ-ONLY: it follows logs\bot.log an
 rem starts/stops/touches the bot process.
 chcp 65001 >nul
 title CS2 QQ Bot - live log (read-only, Ctrl+C to quit)
-cd /d "D:\cs2-qq-bot"
+cd /d "%~dp0"
 echo ============================================================
 echo  CS2 QQ Bot live log  ->  logs\bot.log
 echo  Read-only view. The bot itself runs under scheduled task CS2QQBot.
 echo  Press Ctrl+C to close this window (the bot keeps running).
 echo ============================================================
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Path 'D:\cs2-qq-bot\logs\bot.log' -Encoding UTF8 -Tail 40 -Wait"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Path '%~dp0..\logs\bot.log' -Encoding UTF8 -Tail 40 -Wait"
 pause >nul

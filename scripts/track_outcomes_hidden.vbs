@@ -5,9 +5,13 @@
 ' into signal_outcomes. Safe while the bot runs (WAL + short transactions).
 ' -X utf8 is required: with stdout redirected to a file python uses the ANSI codepage
 ' (GBK here) and the log becomes unreadable mojibake.
+' Path-portable since V0.3.26: repo root is derived from this script's folder.
 Option Explicit
-Dim sh, cmd, rc
+Dim fso, here, root, sh, cmd, rc
+Set fso = CreateObject("Scripting.FileSystemObject")
+here = fso.GetParentFolderName(WScript.ScriptFullName)      ' ...\cs2-qq-bot\scripts
+root = fso.GetParentFolderName(here)                        ' ...\cs2-qq-bot
 Set sh = CreateObject("WScript.Shell")
-cmd = "cmd /c cd /d D:\cs2-qq-bot && .venv\Scripts\python.exe -X utf8 scripts\track_signal_outcomes.py >> logs\outcome.log 2>&1"
+cmd = "cmd /c cd /d """ & root & """ && .venv\Scripts\python.exe -X utf8 scripts\track_signal_outcomes.py >> logs\outcome.log 2>&1"
 rc = sh.Run(cmd, 0, True)
 WScript.Quit rc
