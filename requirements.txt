@@ -1,0 +1,13 @@
+# 倒货波 · CS2 饰品行情机器人 —— 运行时依赖
+# 安装:  .venv\Scripts\python.exe -m pip install -r requirements.txt
+# 环境:  Python 3.10+（当前实测 3.10.11 / Windows 10）
+
+qq-botpy==1.2.1      # QQ 官方机器人 SDK（botpy：QQ 事件与 API）
+aiohttp==3.14.3      # 异步 HTTP：CSQAQ 榜单/批量查价、SteamDT 日K
+PyYAML==6.0.3        # config.yaml 解析
+Pillow==12.3.0       # /分析 走势图渲染（bot/csqaq/chart.py）
+
+# 说明：
+# - aiohttp 同时是 qq-botpy 的传递依赖，这里显式钉版本，避免升级后签名/超时行为漂移。
+# - 智能回复（/问 等）走 HTTP 直连智谱 API，不需要额外 SDK。
+# - 测试不引入 pytest：tests/ 下是纯标准库脚本，由 tests\run_all.py 驱动。

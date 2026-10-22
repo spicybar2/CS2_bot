@@ -1,0 +1,18 @@
+﻿__pycache__/
+*.pyc
+.venv/
+config.yaml
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+botpy.log
+botpy.log.*
+.bot_singleton.lock
+
+# 项目整理产物:历史脚本/旧日志的归档目录,随时可整体删除,不入库
+archive/
+*.mp4
+*.zip
+.pytest_cache/

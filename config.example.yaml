@@ -1,0 +1,139 @@
+# ============================================================
+# CS2 饰品行情 QQ 机器人 - 配置文件示例
+# 复制为 config.yaml 并填入真实凭证后使用
+# ============================================================
+
+# ---- CSQAQ 数据源 ----
+# 注册地址: https://csqaq.com/home 登录后点击头像 -> 查看 ApiToken
+# 注意: 需在 CSQAQ 后台绑定本服务器的出口IP白名单
+csqaq:
+  api_token: "在这里填入你的CSQAQ_API_TOKEN"
+  # 接口基础地址（一般无需修改）
+  base_url: "https://api.csqaq.com/api/v1"
+  # 请求间隔（秒），避免触发限频。官方限制较宽松，默认 1.0
+  request_interval: 1.0
+  # 单次请求失败重试次数
+  retry_times: 3
+
+# ---- QQ 机器人 ----
+# 注册地址: https://q.qq.com 创建机器人 -> 开发设置
+# 需要: 在"开发设置-权限配置"中开启【群聊消息】权限
+# 机器人须为"已上线"状态，且被拉入目标QQ群
+qq:
+  appid: "在这里填入你的QQ机器人AppID"
+  secret: "在这里填入你的QQ机器人AppSecret"
+  # 触发关键词（无需@直接触发；QQ群公域机器人必须@才能收到消息，保留默认即可）
+  # 形如 /推荐 的斜杠指令 + 自然语言关键词
+  keywords:
+    recommend: ["推荐", "选品", "有什么好买的", "买什么"]
+    price: ["价格", "行情", "多少钱"]
+    rank: ["排行", "涨跌榜", "排行榜"]
+    help: ["帮助", "help", "指令"]
+
+# ---- 数据采集调度 ----
+scheduler:
+  # 全量排行数据抓取间隔（分钟）。建议 10-30，避免给 CSQAQ 造成压力
+  fetch_interval_minutes: 15
+  # 每次抓取的排行榜页数（每页 page_size 条，默认 100）
+  rank_page_size: 100
+  rank_max_pages: 3
+
+# ---- 定时推送（可选）----
+# 每天 15:00 向指定群推送昨日/近7日异动总结
+# group_openid 需要先让机器人被@一次，从日志中获取
+push:
+  enable: false
+  # 推送的群 openid 列表
+  group_openids: []
+  # 推送时间 HH:MM（服务器本地时间）
+  times: ["15:00"]
+
+# ---- 异动雷达 ----
+anomaly:
+  enable: true
+  b_size: 3000
+  # BUFF+悠悠实时求购合计低于此值不进入异动评分/推送
+  min_anomaly_buy_num: 50
+  # 已有成员真实求购持续低于门槛的观察期；carry-forward 不开启或推进计时
+  anomaly_buy_grace_minutes: 60
+  # 价格窗口绝对变动下限（元）：低于该金额的价格变动不计分，防低价品百分比虚高
+  price_abs_min: 2.0
+  # 买卖价差变化满分线：榜单源按 %（sell_buy_diff_chg_buff），批量源自算按百分点（pp）；仅收窄方向计分
+  spread_pct_full: 30.0
+  spread_pp_full: 3.0
+  # 中期基线合理性闸：超过则不计入趋势与方向（陈旧/错误基线防护）
+  trend_baseline_max_7d: 100.0
+  trend_baseline_max_30d: 200.0
+  # ---- 资金周期四阶段（建仓/启动/派发）V0.3.0 阈值 ----
+  # 窗口：120 = 用两小时总结快照做指纹比较（短线评分仍用 5m/30m/1h）
+  phase_window_minutes: 120
+  # 建仓：窗口求购净增 ≥12%，且绝对增量 ≥ max(3 单, 基线×12%)
+  accum_buy_pct_min: 12.0
+  accum_abs_min_units: 3
+  # 建仓横盘：|价格变化| <3% 或 |变化金额| ≤0.5 元（低价品一个报价台阶就是百分之几）
+  accum_price_quiet: 3.0
+  accum_price_quiet_abs: 0.5
+  # 启动：求购价 ≥3% + 价格 ≥1% 且金额 ≥2 元，逐段走高、在售不增、7 日涨幅 <15%
+  launch_buy_price_pct: 3.0
+  launch_price_abs_min: 2.0
+  launch_sell_max: 5.0
+  launch_rate7_max: 15.0
+  # 派发：现价 ≥ 近 30 日最高价 ×90% 且 在售 ≥6% 暴增、求购停滞 <2%
+  distrib_range_pct: 90.0
+  distrib_range_days: 30
+  distrib_sell_pct: 6.0
+  # 阶段加分（取代旧保底分）：最终分 = min(100, 基础分 + 加分)
+  # 阶段信号基础分实测只有 6~20 分，保底分会架空评分、硬闸门又会杀光真信号，故用加分制
+  phase_bonus_accum: 45
+  phase_bonus_launch: 45
+  phase_bonus_distrib: 65
+
+# ---- 卖出费率（仅用于 /分析 展示「扣费后到手」，不影响评分/阈值）----
+fees:
+  buff_sell_pct: 2.5        # BUFF 卖出手续费%
+  yyyp_sell_pct: 2.0        # 悠悠有品卖出手续费%
+  steam_sell_pct: 15.0      # Steam 社区市场总费率%（余额不可直接提现，跨平台价差不能直接套利）
+
+# ---- 推荐策略参数 ----
+recommend:
+  # 排除价格低于该值（元）的饰品（过滤印花、低价垃圾等）
+  min_price: 50
+  # 推荐价格上限（元）：放宽到 20000，让流动性好的高价枪/刀也能进超跌榜
+  max_price: 20000
+  # 超跌流动性门槛（BUFF+悠悠在售/求购 + Steam 在售合计单数的下限；Steam 求购字段是脏数据，已剔除）
+  min_liquidity: 50
+  # 推荐数量
+  top_n: 8
+
+# ---- AI 智能回复（可选）----
+# 群友用自然语言提问时，由 LLM 理解意图 → 调用工具查 CSQAQ 真实数据 → 组织自然语言回复
+# 支持各家 OpenAI 兼容端点，注册后填入 api_key 即可（默认识别 GLM-4-Flash 免费档）
+llm:
+  # 是否启用 AI 智能回复。false 时自然语言走本地关键词意图识别（原逻辑）
+  enable: true
+  # 各家免费/低价端点与模型（三选一，改 base_url + model 即可）:
+  #   智谱 GLM-4-Flash(免费): https://open.bigmodel.cn/api/paas/v4  model: glm-4-flash
+  #   腾讯混元:              https://api.hunyuan.cloud.tencent.com/v1  model: hunyuan-turbo
+  #   DeepSeek:              https://api.deepseek.com/v1  model: deepseek-chat
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
+  api_key: "在这里填入你的LLM_API_KEY"
+  model: "glm-4-flash"
+  # 单次 LLM 请求超时（秒）
+  timeout: 30.0
+  # 回复最大 token 数（控制成本与长度）
+  max_tokens: 600
+  # 采样温度
+  temperature: 0.7
+  # 每个会话保留的历史消息条数（支持追问上下文）
+  history_len: 8
+  # 会话上下文有效期（秒），超过则视为新对话
+  history_ttl: 1800
+  # true=所有自然语言都走 AI（回复更自然，默认）; false=仅本地识别不出的意图才走 AI（更省）
+  route_all_nl: true
+
+# ---- 会员群白名单 ----
+# 盯盘等会员功能仅以下群可用;普通群使用会回复"仅会员群可用"
+# 群 openid 获取: 在该群 @机器人 一次,日志会打印 group_openid
+vip:
+  group_openids: []
+  watch_enable: true
