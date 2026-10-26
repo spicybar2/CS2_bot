@@ -4,7 +4,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent       # tools/ 的上一级才是仓库根
 DB = ROOT / "data" / "csqaq.db"
 
 
