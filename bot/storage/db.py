@@ -164,6 +164,41 @@ CREATE TABLE IF NOT EXISTS anomaly_push_cooldown (
     PRIMARY KEY (good_id, name)
 );
 
+-- V0.3.27 成本门槛观察:每条异动候选的「折后边际」快照。
+-- 动机:推送前从没算过「这笔能不能覆盖 2.5% 手续费 + 1% 提现 + 买卖价差」。
+-- 实测池内买卖价差中位 4.2%、¥50 以下 49%,人民币品往返成本 3.5%~12.5%,
+-- 而引擎对 ¥58 品 0.26% 的波动也计分 —— 扣费后是负收益。
+-- 本表先只观察不改推送;与 signal_outcomes 按 (good_id, ts) join 即可回答
+-- 「边际高的候选是否真的更赚钱」——这是唯一能验证门槛对错的证据。
+-- 关键:**没推送的候选也要记录**(push_status='capped'),否则被拦的那批永远没有结果。
+CREATE TABLE IF NOT EXISTS cost_gate_observe (
+    good_id INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    name TEXT,
+    pool TEXT,
+    level TEXT,
+    score REAL DEFAULT 0,
+    verdict TEXT NOT NULL DEFAULT 'skip',   -- pass 达标 / block 未达标 / skip 数据不足
+    reason TEXT,
+    buy_platform TEXT,                      -- buff / yyyp(取更便宜的那个)
+    buy_ask REAL DEFAULT 0,
+    buff_ask REAL DEFAULT 0,
+    yyyp_ask REAL DEFAULT 0,
+    gap_pct REAL DEFAULT 0,                 -- 两平台价差%(>15% 判离群)
+    baseline REAL DEFAULT 0,                -- 近 N 日日收盘中位价
+    baseline_days INTEGER DEFAULT 0,
+    sell_fee_pct REAL DEFAULT 0,
+    cost_pct REAL DEFAULT 0,                -- 往返成本 = 卖出费 + 提现
+    discount_pct REAL DEFAULT 0,            -- (基准 - 买入价) / 基准
+    edge_pct REAL DEFAULT 0,                -- 折扣 - 成本 = 排序键
+    spread_pct REAL DEFAULT 0,              -- 买入平台的要价-求购价差
+    rank INTEGER DEFAULT 0,                 -- 本轮候选内的边际排名(1 = 最优)
+    push_status TEXT,
+    created_at TEXT,
+    PRIMARY KEY (good_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_cost_verdict ON cost_gate_observe (verdict, edge_pct);
+
 -- V0.3.17 市场情绪按日归档(老大 2026-10-14 选做 D)。
 -- 目的:大盘卡只显示一个静态「市场热度」词,而 /current_data 还带 greedy(热度历史)与
 -- rate_data(同一批约 2.6 万件商品在 1/7/15/30/90/180 天窗口下的涨跌家数,三态之和恒等)。
@@ -921,11 +956,15 @@ class SnapshotStore:
         "push_status": "pending", "push_detail": None,
     }
 
-    def insert_anomaly_events(self, rows: List[Dict[str, Any]]):
-        """写入本轮检测到的异动事件(含去噪后的扫货/下架/假动作)。"""
+    def insert_anomaly_events(self, rows: List[Dict[str, Any]], ts: Optional[str] = None):
+        """写入本轮检测到的异动事件(含去噪后的扫货/下架/假动作)。
+
+        :param ts: 统一时间戳(秒级)。V0.3.27 起由调用方传入,好让成本观察表
+                   `cost_gate_observe` 用 (good_id, ts) 与本表精确 join;不传则现取。
+        """
         if not rows:
             return
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = ts or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._lock, self._connect() as conn:
             conn.executemany(
                 """INSERT INTO anomaly_events
@@ -949,8 +988,9 @@ class SnapshotStore:
             )
             conn.commit()
 
-    async def async_insert_anomaly_events(self, rows: List[Dict[str, Any]]):
-        await asyncio.to_thread(self.insert_anomaly_events, rows)
+    async def async_insert_anomaly_events(self, rows: List[Dict[str, Any]],
+                                          ts: Optional[str] = None):
+        await asyncio.to_thread(self.insert_anomaly_events, rows, ts)
 
     def count_anomaly_pushes_today(self, day_start: str) -> Dict[int, int]:
         """统计当天每个品已占用推送额度的条数(V0.3.16 每品每日上限用)。
@@ -1158,6 +1198,97 @@ class SnapshotStore:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM signal_outcomes ORDER BY event_ts DESC LIMIT ?", (int(limit),)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---------- 成本门槛观察(V0.3.27) ----------
+    # 只在推送落库时按品取一次,全部走 good_id 索引,毫秒级,不占总预算。
+
+    def get_price_quotes(self, good_id: int, days: int = 7) -> Dict[str, Dict[str, Any]]:
+        """取单品两平台的「最新报价 + 近 N 日日收盘」。
+
+        日收盘口径与 get_price_range_map 一致:当天最后一笔真实快照(`MAX(ts)` 裸列,
+        SQLite 3.7.11+ 保证其余列取自该行),避免单笔异常报价定义基准。
+        样本太薄就返回空 closes,由上层判 `baseline_thin` —— 宁缺毋假。
+        """
+        out: Dict[str, Dict[str, Any]] = {
+            "buff": {"ask": 0.0, "bid": 0.0, "sell_num": 0, "ask_ts": "", "closes": []},
+            "yyyp": {"ask": 0.0, "bid": 0.0, "sell_num": 0, "ask_ts": "", "closes": []},
+        }
+        if not good_id:
+            return out
+        # 多取一天,保证凑满 N 个完整自然日
+        cutoff = (datetime.now() - timedelta(days=max(1, int(days)) + 1)
+                  ).strftime("%Y-%m-%d %H:%M:%S")
+        # 基准只吃**已完结交易日**:当天还没走完,把现价算进基准会自我参照
+        # (价格当天跌了 → 基准也跟着跌 → 折扣被自己抹平),故显式排除今天。
+        today = datetime.now().strftime("%Y-%m-%d")
+        with self._lock, self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            latest = conn.execute(
+                "SELECT ts, buff_sell_price, buff_buy_price, buff_sell_num, "
+                "       yyyp_sell_price, yyyp_buy_price "
+                "FROM item_listing_history WHERE good_id=? ORDER BY ts DESC LIMIT 1",
+                (int(good_id),)).fetchone()
+            if not latest:
+                return out
+            out["buff"].update(
+                ask=float(latest["buff_sell_price"] or 0),
+                bid=float(latest["buff_buy_price"] or 0),
+                sell_num=int(latest["buff_sell_num"] or 0),
+                ask_ts=str(latest["ts"] or ""))
+            out["yyyp"].update(
+                ask=float(latest["yyyp_sell_price"] or 0),
+                bid=float(latest["yyyp_buy_price"] or 0),
+                ask_ts=str(latest["ts"] or ""))
+            closes = conn.execute(
+                """SELECT MAX(ts) mts, buff_sell_price bp, yyyp_sell_price yp
+                     FROM item_listing_history
+                    WHERE good_id=? AND ts >= ? AND substr(ts,1,10) < ?
+                    GROUP BY substr(ts,1,10) ORDER BY mts""",
+                (int(good_id), cutoff, today)).fetchall()
+        for r in closes:
+            bp = float(r["bp"] or 0)
+            yp = float(r["yp"] or 0)
+            if bp > 0:
+                out["buff"]["closes"].append(bp)
+            if yp > 0:
+                out["yyyp"]["closes"].append(yp)
+        # 只保留最近 N 个日收盘
+        keep = max(1, int(days))
+        out["buff"]["closes"] = out["buff"]["closes"][-keep:]
+        out["yyyp"]["closes"] = out["yyyp"]["closes"][-keep:]
+        return out
+
+    async def async_get_price_quotes(self, good_id: int,
+                                     days: int = 7) -> Dict[str, Dict[str, Any]]:
+        return await asyncio.to_thread(self.get_price_quotes, good_id, days)
+
+    def insert_cost_observations(self, rows: List[Dict[str, Any]]) -> None:
+        """写入成本门槛观察行(按 (good_id, ts) 幂等)。"""
+        if not rows:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cols = ("good_id", "ts", "name", "pool", "level", "score", "verdict", "reason",
+                "buy_platform", "buy_ask", "buff_ask", "yyyp_ask", "gap_pct", "baseline",
+                "baseline_days", "sell_fee_pct", "cost_pct", "discount_pct", "edge_pct",
+                "spread_pct", "rank", "push_status", "created_at")
+        sql = ("INSERT OR REPLACE INTO cost_gate_observe (" + ", ".join(cols) + ") VALUES ("
+               + ", ".join("?" * len(cols)) + ")")
+        with self._lock, self._connect() as conn:
+            conn.executemany(
+                sql, [[r.get(c) if c != "created_at" else now for c in cols] for r in rows])
+            conn.commit()
+
+    async def async_insert_cost_observations(self, rows: List[Dict[str, Any]]) -> None:
+        await asyncio.to_thread(self.insert_cost_observations, rows)
+
+    def list_cost_observations(self, limit: int = 5000) -> List[Dict[str, Any]]:
+        """取观察行(新→旧),供 scripts 汇总「边际分档 vs 实际收益」。"""
+        with self._lock, self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM cost_gate_observe ORDER BY ts DESC LIMIT ?", (int(limit),)
             ).fetchall()
         return [dict(r) for r in rows]
 

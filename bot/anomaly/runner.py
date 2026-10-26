@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from bot.anomaly.engine import AnomalyEngine, HistoryPoint, MetricSnapshot
+from bot.anomaly.cost import (CostObservation, PlatformQuote, VERDICT_BLOCK,
+                              VERDICT_PASS, VERDICT_SKIP, build_observation,
+                              rank_observations, summarize)
 from bot.anomaly.pool import POOL_A, POOL_B, POOL_S, WatchPoolManager
 from bot.config import AnomalyConfig
 from bot.csqaq.client import (
@@ -1070,12 +1073,71 @@ async def _persist_events(cfg: AnomalyConfig, store: SnapshotStore,
     cooldowns = {(r["good_id"], r["name"]): (r.pop("_cooldown_until"), float(r.get("score") or 0),
                                              r.get("anomaly_type") or "normal")
                  for r in out}
+    # V0.3.27 成本门槛观察:落库前先把「折后边际」算出来(只记录,不改推送)。
+    # 与事件共用同一个秒级 ts,便于 cost_gate_observe 与 signal_outcomes 精确 join。
+    ts_now = now.strftime("%Y-%m-%d %H:%M:%S")
+    await _observe_cost(cfg, store, out, ts_now, tag)
     try:
-        await store.async_insert_anomaly_events(out)
+        await store.async_insert_anomaly_events(out, ts=ts_now)
         await _mark_cooldown(store, cooldowns)
         logger.info("[ANOMALY] 落库异动 %d 件(池=%s)", len(out), tag)
     except Exception as exc:
         logger.exception("[ANOMALY] 写异动事件失败: %s", exc)
+
+
+async def _observe_cost(cfg: AnomalyConfig, store: SnapshotStore,
+                        rows: List[Dict[str, Any]], ts: str, tag: str) -> None:
+    """V0.3.27 成本门槛【观察模式】:算每条候选的折后边际,记日志 + 落库。
+
+    为什么要算:一笔倒货的往返成本 = 卖出费(2.5%/2.0%)+ 提现(1%,最低 ¥2),
+    实测池内买卖价差中位 4.2%、¥50 以下 49% —— 而引擎对 0.26% 的波动也计分。
+    本函数**只观察不拦截**:mode=observe 时推送行为与本版本之前完全一致。
+
+    口径(见 bot/anomaly/cost.py 顶部注释):
+      · 买入价取**两平台里更便宜的有效报价**(只看 BUFF 会系统性高估成本)
+      · 基准价用该平台**近 N 日日收盘中位价**(30 日窗口在池内商品上点数不足,已弃用)
+      · 两平台价差 >15% 判离群(实测 55% 原始样本是单边无接盘的假价)
+      · 折扣 = (基准 - 买入价)/基准;边际 = 折扣 - 成本;边际高 = 排序靠前
+    """
+    gate = getattr(cfg, "cost_gate", None)
+    if not rows or not gate or not getattr(gate, "enable", False):
+        return
+    now = datetime.now()
+    obs_list: List[Any] = []
+    for r in rows:
+        gid = int(r.get("good_id") or 0)
+        if gid <= 0:
+            continue
+        try:
+            raw = await store.async_get_price_quotes(gid, days=int(gate.baseline_days))
+        except Exception as exc:      # 取数失败不该影响落库与推送
+            logger.warning("[COST] 取报价失败 %s: %s", r.get("name"), exc)
+            continue
+        quotes: Dict[str, Any] = {}
+        for platform, q in (raw or {}).items():
+            age = 1e9
+            if q.get("ask_ts"):
+                qts = _parse_dt(q["ask_ts"])
+                if qts:
+                    age = max(0.0, (now - qts).total_seconds() / 60.0)
+            quotes[platform] = PlatformQuote(
+                platform=platform, ask=float(q.get("ask") or 0),
+                bid=float(q.get("bid") or 0), sell_num=int(q.get("sell_num") or 0),
+                ask_age_min=age, closes=list(q.get("closes") or []))
+        obs_list.append(build_observation(
+            gid, ts, quotes, gate, name=str(r.get("name") or ""), pool=tag,
+            level=str(r.get("level") or ""), score=float(r.get("score") or 0),
+            push_status=str(r.get("push_status") or "")))
+    if not obs_list:
+        return
+    rank_observations(obs_list)
+    for o in obs_list:
+        logger.info("%s", o.log_line())
+    logger.info("[COST] 汇总 %s(池=%s)", summarize(obs_list), tag)
+    try:
+        await store.async_insert_cost_observations([o.as_row() for o in obs_list])
+    except Exception as exc:
+        logger.exception("[COST] 落库失败: %s", exc)
 
 
 async def pool_mgr_rows(store: SnapshotStore) -> Dict[Any, Dict[str, Any]]:

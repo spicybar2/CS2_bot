@@ -7,6 +7,8 @@ from typing import Dict, List
 
 import yaml
 
+from bot.anomaly.cost import CostGateConfig
+
 
 @dataclass
 class CSQAQConfig:
@@ -357,6 +359,12 @@ class AnomalyConfig:
     # ---- 限流(全局目标 ≤13 req/min) ----
     max_req_per_min: int = 13
 
+    # ---- 成本门槛观察(V0.3.27)----
+    # 与费用口径联动(卖出费取 fees 段),故解析放在 fees 之后。
+    # 职责只有一个:给每条异动候选算出「折后边际 = 折扣 - 往返成本」并落库,
+    # 供日后用真实结果验证「边际高的候选是否真的更赚钱」。mode=observe 不改推送。
+    cost_gate: "CostGateConfig" = field(default_factory=lambda: CostGateConfig())
+
 
 @dataclass
 class FeeConfig:
@@ -581,6 +589,14 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         for k in ("buff_sell_pct", "yyyp_sell_pct", "steam_sell_pct"):
             if k in c:
                 setattr(cfg.fees, k, float(c[k]))
+
+    # V0.3.27 成本门槛观察:卖出费口径继承 fees 段(买入无手续费,只算卖出费 + 提现)。
+    # 必须放在 fees 之后解析,否则拿到的是默认费率。
+    if "cost_gate" in raw:
+        cfg.anomaly.cost_gate = CostGateConfig.from_mapping(
+            raw.get("cost_gate") or {},
+            buff_fee=cfg.fees.buff_sell_pct,
+            yyyp_fee=cfg.fees.yyyp_sell_pct)
 
     if "admin" in raw:
         c = raw["admin"]
