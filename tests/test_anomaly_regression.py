@@ -195,7 +195,9 @@ def test_pool_decide() -> None:
     check("新商品≥55 → A", mgr.decide(None, 60.0)[0] == POOL_A)
     check("新商品<55 → B", mgr.decide(None, 30.0)[0] == POOL_B)
     # A→S 升级 / A 连续低分降级
-    check("A 高分 → S", mgr.decide(_row(POOL_A, 60.0), 75.0)[0] == POOL_S)
+    # V0.3.28:A→S 改为「连续 confirm 轮」确认(单轮尖峰不升级,防 100/14 抖动来回)
+    check("A 高分单轮(hit=1) → 仍留 A", mgr.decide(_row(POOL_A, 60.0), 75.0, hit_rounds=1)[0] == POOL_A)
+    check("A 高分连轮(hit=2) → S", mgr.decide(_row(POOL_A, 60.0), 75.0, hit_rounds=2)[0] == POOL_S)
     check("A 连续低分 → B", mgr.decide(_row(POOL_A, 60.0, quiet=CFG.anomaly.a_to_b_rounds - 1), 30.0)[0] == POOL_B)
     check("A 低分未满轮 → 留 A", mgr.decide(_row(POOL_A, 60.0, quiet=0), 30.0)[0] == POOL_A)
     # S TTL 过期降级 / 连续低分降级

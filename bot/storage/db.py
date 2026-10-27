@@ -384,6 +384,20 @@ class SnapshotStore:
                 conn.execute(
                     "ALTER TABLE watch_pool ADD COLUMN anomaly_buy_low_since TEXT"
                 )
+                wp_cols.append("anomaly_buy_low_since")
+            # V0.3.28 池卫生:
+            #  s_rearm_at  —— S 池降级后的「冷却到此刻」,冷却期内禁止再升回 S(防 A↔S 抖动);
+            #  best_score  —— 进池以来的历史最高分,沉底判定用(「从没冒过信号」而不是「这一刻分低」)。
+            for col, ddl in (("s_rearm_at", "TEXT"), ("best_score", "REAL DEFAULT 0")):
+                if col not in wp_cols:
+                    conn.execute(f"ALTER TABLE watch_pool ADD COLUMN {col} {ddl}")
+                    if col == "best_score":
+                        # 回填:老成员的当前分就是唯一已知观测,先当作历史最高分,
+                        # 免得升级后第一次清理就把整池当「从未达标」清掉。
+                        conn.execute(
+                            "UPDATE watch_pool SET best_score="
+                            "MAX(COALESCE(score,0), COALESCE(last_score,0))")
+                    wp_cols.append(col)
             # 迁移:item_listing_history 增加 buff_buy_price(算买卖价差,异动雷达 SpreadScore 依赖)
             lh_cols = [r[1] for r in conn.execute("PRAGMA table_info(item_listing_history)")]
             if "buff_buy_price" not in lh_cols:
@@ -1387,15 +1401,18 @@ class SnapshotStore:
                 """INSERT INTO watch_pool
                    (good_id, name, market_hash_name, pool, score, enter_time, last_update,
                    last_push_at, cooldown_until, hit_count, quiet_count, last_score,
-                   quality_reject_count, anomaly_buy_low_since)
+                   quality_reject_count, anomaly_buy_low_since, s_rearm_at, best_score)
                    VALUES (:good_id, :name, :market_hash_name, :pool, :score, :enter_time,
                            :last_update, :last_push_at, :cooldown_until, :hit_count,
                            :quiet_count, :last_score, :quality_reject_count,
-                           :anomaly_buy_low_since)
+                           :anomaly_buy_low_since, :s_rearm_at, :best_score)
                    ON CONFLICT(good_id, name) DO UPDATE SET
                      score=excluded.score,
                      pool=excluded.pool,
                      market_hash_name=excluded.market_hash_name,
+                     -- V0.3.28:enter_time 必须是「进入当前池的时刻」,之前漏更导致
+                     -- S 池 TTL 一旦过期就永久过期 → A↔S 无限抖动。
+                     enter_time=excluded.enter_time,
                      last_update=excluded.last_update,
                      last_push_at=excluded.last_push_at,
                      cooldown_until=excluded.cooldown_until,
@@ -1403,7 +1420,9 @@ class SnapshotStore:
                      quiet_count=excluded.quiet_count,
                      last_score=excluded.last_score,
                      quality_reject_count=excluded.quality_reject_count,
-                     anomaly_buy_low_since=excluded.anomaly_buy_low_since""",
+                     anomaly_buy_low_since=excluded.anomaly_buy_low_since,
+                     s_rearm_at=excluded.s_rearm_at,
+                     best_score=excluded.best_score""",
                 [dict(r,
                       enter_time=r.get("enter_time") or now,
                       last_update=r.get("last_update") or now,
@@ -1415,6 +1434,8 @@ class SnapshotStore:
                       last_score=float(r.get("last_score") or 0),
                       quality_reject_count=int(r.get("quality_reject_count") or 0),
                       anomaly_buy_low_since=r.get("anomaly_buy_low_since"),
+                      s_rearm_at=r.get("s_rearm_at"),
+                      best_score=float(r.get("best_score") or 0),
                       score=float(r.get("score") or 0))
                  for r in rows],
             )
@@ -1588,6 +1609,64 @@ class SnapshotStore:
     async def async_list_watch_pool(self, pool: Optional[str] = None,
                                     limit: int = 10000) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(self.list_watch_pool, pool, limit)
+
+    def list_stale_watch_pool(self, hours: int, limit: int,
+                              pool: Optional[str] = None) -> List[Dict[str, Any]]:
+        """取「最久没被扫描更新」的池成员,供强制回扫(看门狗)。
+
+        排名口径:last_update 最旧优先(为空的排最前),同新旧按分数从低到高 ——
+        先救那些既久没看过、又一直没信号的成员,避免它们永远沉在池底占位。
+        """
+        cutoff = (datetime.now() - timedelta(hours=max(1, int(hours)))
+                  ).strftime("%Y-%m-%d %H:%M:%S")
+        sql = "SELECT * FROM watch_pool WHERE (last_update IS NULL OR last_update < ?)"
+        args: List[Any] = [cutoff]
+        if pool:
+            sql += " AND pool=?"
+            args.append(str(pool))
+        sql += " ORDER BY COALESCE(NULLIF(last_update,''),'') ASC, score ASC LIMIT ?"
+        args.append(int(max(1, limit)))
+        with self._lock, self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+    async def async_list_stale_watch_pool(self, hours: int, limit: int,
+                                         pool: Optional[str] = None
+                                         ) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self.list_stale_watch_pool, hours, limit, pool)
+
+    def purge_stale_watch_pool(self, days: int, below_score: float, limit: int,
+                               pool: str = "B") -> List[Tuple[int, str]]:
+        """沉底:进池满 ``days`` 天、历史最高分从未到过 ``below_score`` 的成员移出池。
+
+        判定用 best_score(历史最高)而不是当前分:当前分只代表最后一刻,而
+        「进池一周从没冒过信号」才是真的占位。返回被移除的 (good_id, name)。
+        """
+        keep = max(1, int(limit))
+        cutoff = (datetime.now() - timedelta(days=max(1, int(days)))
+                  ).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT good_id, name FROM watch_pool
+                    WHERE pool=? AND COALESCE(enter_time,'') <> '' AND enter_time < ?
+                      AND COALESCE(best_score,0) < ?
+                    ORDER BY enter_time ASC LIMIT ?""",
+                (str(pool), cutoff, float(below_score), keep)).fetchall()
+            if not rows:
+                return []
+            conn.executemany(
+                "DELETE FROM watch_pool WHERE good_id=? AND name=?",
+                [(int(r["good_id"]), r["name"]) for r in rows])
+            conn.commit()
+        return [(int(r["good_id"]), r["name"]) for r in rows]
+
+    async def async_purge_stale_watch_pool(self, days: int, below_score: float,
+                                           limit: int, pool: str = "B"
+                                           ) -> List[Tuple[int, str]]:
+        return await asyncio.to_thread(
+            self.purge_stale_watch_pool, days, below_score, limit, pool)
 
     def count_watch_pool(self) -> Dict[str, int]:
         """各池数量统计,供 /异动 状态 命令展示。"""

@@ -76,6 +76,22 @@ class WatchPoolManager:
             return False
         return float(row.get("last_score") or 0) < low_score
 
+    @staticmethod
+    def _rearm_blocked(row: Dict[str, Any]) -> bool:
+        """S 池降级冷却期内禁止再升回 S(V0.3.28 反抖)。
+
+        实测 2026-10-27:一枚印花在 1 小时 45 分钟里 A→S 升级 10 次,
+        每次升上去几十秒就被 TTL/低分打回来,日志、事件、推送全被同一件货刷屏。
+        """
+        raw = row.get("s_rearm_at")
+        if not raw:
+            return False
+        try:
+            t = datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return False
+        return datetime.now() < t
+
     def decide(self, cur: Optional[Dict[str, Any]], score: float,
                allow_downgrade: bool = True,
                hit_rounds: int = 0, strong: bool = False) -> Tuple[str, str]:
@@ -97,10 +113,12 @@ class WatchPoolManager:
                 return POOL_A, "new_active"
             return POOL_B, "discovered"
 
+        confirm_rounds = c.book_confirm_rounds if c.book_confirm_rounds > 0 else c.b_confirm_rounds
         pool = cur.get("pool") or POOL_B
         if not allow_downgrade and pool in (POOL_A, POOL_S):
             # B 池扫描只做"发现与升级",不干预 A/S 池的归属
-            if pool == POOL_A and score >= c.a_to_s:
+            if (pool == POOL_A and score >= c.a_to_s
+                    and not self._rearm_blocked(cur)):
                 return POOL_S, "score_high"
             return pool, ""
         if pool == POOL_S:
@@ -112,8 +130,11 @@ class WatchPoolManager:
                     return POOL_A, "score_low"
             return POOL_S, ""
         if pool == POOL_A:
-            if score >= c.a_to_s:
-                return POOL_S, "score_high"
+            # V0.3.28:A→S 也要连续确认 + 冷却,原先单轮高分即直升,
+            # 会让「一分钟前 100 分、这一分钟 14 分」的噪声来回升。
+            if (score >= c.a_to_s and hit_rounds >= max(1, confirm_rounds)
+                    and not self._rearm_blocked(cur)):
+                return POOL_S, "score_high_confirmed"
             # 僵尸回落:长时间未被打分(已跌出活跃榜)且上次分低 → 降 B,别占 A 高频名额
             if self._stale(cur, c.a_stale_minutes, c.b_to_a):
                 return POOL_B, "stale_off_list"
@@ -123,7 +144,6 @@ class WatchPoolManager:
                     return POOL_B, "quiet"
             return POOL_A, ""
         # B 池存量升级:强信号可单轮直升,普通高分需连续两轮确认(降抖)
-        confirm_rounds = c.book_confirm_rounds if c.book_confirm_rounds > 0 else c.b_confirm_rounds
         confirmed = strong or hit_rounds >= max(1, confirm_rounds)
         if score >= c.a_to_s and confirmed:
             return POOL_S, "score_high_confirmed"
@@ -168,6 +188,8 @@ class WatchPoolManager:
                 "last_score": float(row.get("last_score") or 0),
                 "quality_reject_count": int(reject_count),
                 "anomaly_buy_low_since": anomaly_buy_low_since,
+                "s_rearm_at": row.get("s_rearm_at"),
+                "best_score": float(row.get("best_score") or 0),
             }
 
         for r in results:
@@ -261,6 +283,21 @@ class WatchPoolManager:
                                       strong=strong)
 
             prev_pool = (cur.get("pool") or POOL_B) if cur else None
+            entered_new_pool = cur is None or prev_pool != target
+            # V0.3.28:enter_time 必须是「进入当前池的时刻」——TTL 从这里起算。
+            # 之前 UPSERT 漏了 enter_time,它就永远是首次发现时间,S 池 TTL 一旦
+            # 过期就永久过期,于是每轮都 S→A(ttl)、下一轮又 A→S,无限抖动。
+            enter_time = now if entered_new_pool else ((cur or {}).get("enter_time") or now)
+            # 反抖:S 池降级后进冷却,冷却期内不再升回 S;真正回到 S 时清空冷却。
+            s_rearm_at = (cur or {}).get("s_rearm_at")
+            if cur is not None and prev_pool != target:
+                rearm_min = max(0, int(getattr(c, "s_rearm_minutes", 45)))
+                if prev_pool == POOL_S and rearm_min > 0:
+                    s_rearm_at = (datetime.now() + timedelta(minutes=rearm_min))
+                    s_rearm_at = s_rearm_at.strftime("%Y-%m-%d %H:%M:%S")
+                elif target == POOL_S:
+                    s_rearm_at = None
+            best_score = max(float((cur or {}).get("best_score") or 0), float(r.score or 0))
             if cur and prev_pool != target:
                 if _POOL_ORDER[target] > _POOL_ORDER[prev_pool]:
                     changes["upgrade"].append(f"{r.name} {prev_pool}→{target} score={r.score}")
@@ -277,7 +314,7 @@ class WatchPoolManager:
                 "market_hash_name": (cur or {}).get("market_hash_name") or mhn_map.get(r.good_id) or "",
                 "pool": target,
                 "score": r.score,
-                "enter_time": (cur or {}).get("enter_time") or now,
+                "enter_time": enter_time,
                 "last_update": now,
                 "last_push_at": (cur or {}).get("last_push_at"),
                 "cooldown_until": (cur or {}).get("cooldown_until"),
@@ -290,6 +327,8 @@ class WatchPoolManager:
                 "anomaly_buy_low_since": (
                     (cur or {}).get("anomaly_buy_low_since")
                     if incomplete == "buy_carried_forward" else None),
+                "s_rearm_at": s_rearm_at,
+                "best_score": best_score,
             })
 
         # 容量淘汰:S 池与 A 池按评分倒序保留前 N,其余降级

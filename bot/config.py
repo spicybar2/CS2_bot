@@ -267,6 +267,18 @@ class AnomalyConfig:
     a_stale_minutes: int = 180          # A 池品「跌出榜单」判僵尸时限:超此时长未被任何扫描
                                         # 更新(=已不在活跃榜)且 last_score<b_to_a → 回落 B 让位
 
+    # ---- 池卫生(V0.3.28):回扫看门狗 + 沉底 + 反抖 ----
+    # 实测 2026-10-27:B 池 1116 件里 952 件(85%)超过 3 天没被任何扫描碰过 ——
+    # 它们靠「榜单轮转」等回扫,而 10 个 sort × 180 分钟一圈永远轮不到长尾;
+    # 同时一枚印花在 1h45m 内 A→S 升级 10 次(S 池 TTL 过期后永久过期导致)。
+    s_rearm_minutes: int = 45           # S 降级后的冷却:冷却期内禁止再升回 S(反抖)
+    stale_rescan_hours: int = 24        # 池成员超此时长没被扫描 → 排进强制回扫队列
+    stale_rescan_per_cycle: int = 200   # 每轮最多回扫多少件(50 件/请求,≈4 次请求)
+    stale_sink_days: int = 7            # 进池满这么多天、历史最高分从未达标 → 沉底
+    stale_sink_trigger_ratio: float = 0.8   # 仅当 B 池占用 ≥ 该比例时才沉底(不空池乱删)
+    stale_sink_per_cycle: int = 50      # 每次清理最多沉底多少件(分批,不一次大扫除)
+    rescan_push_enable: bool = False    # 回扫结果只刷新池数据,不产生推送(发现仍归 B 扫描)
+
     # ---- 盘口信号三重判定(需求/供给增强;2026-09-04,老大) ----
     # 「求购增加/在售减少」从只看百分比升级为 百分比 + 绝对增量 + 基线分档:
     #   500→550(+50,+10%)=强信号;5→6(+1,+20%)=绝对量不足,噪声不计分。
@@ -554,6 +566,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 setattr(cfg.anomaly, k, float(c[k]))
         for k in ("s_to_a_rounds", "a_to_b_rounds", "s_max_minutes",
                   "b_confirm_rounds", "a_stale_minutes",
+                  "s_rearm_minutes", "stale_rescan_hours", "stale_rescan_per_cycle",
+                  "stale_sink_days", "stale_sink_per_cycle",
                   "book_base_low", "book_base_mid", "book_abs_low", "book_abs_mid",
                   "book_abs_high", "book_confirm_rounds",
                   "cooldown_l2_min", "cooldown_l3_min", "cooldown_l4_min",
@@ -561,6 +575,10 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                   "push_top_n", "max_req_per_min"):
             if k in c:
                 setattr(cfg.anomaly, k, int(c[k]))
+        if "stale_sink_trigger_ratio" in c:
+            cfg.anomaly.stale_sink_trigger_ratio = float(c["stale_sink_trigger_ratio"])
+        if "rescan_push_enable" in c:
+            cfg.anomaly.rescan_push_enable = bool(c["rescan_push_enable"])
         if "book_pct_min" in c:
             cfg.anomaly.book_pct_min = float(c["book_pct_min"])
         cfg.anomaly.vip_only = bool(c.get("vip_only", cfg.anomaly.vip_only))

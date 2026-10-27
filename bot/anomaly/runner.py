@@ -1215,16 +1215,28 @@ async def anomaly_a_track_loop(cfg: AnomalyConfig, api: Any, store: SnapshotStor
     global _a_track_cursor
     while True:
         try:
-            rows = await store.async_list_watch_pool(pool=POOL_A,
-                                                     limit=max(cfg.a_size, batch_limit))
+            rows_a = await store.async_list_watch_pool(pool=POOL_A,
+                                                       limit=max(cfg.a_size, batch_limit))
+            # V0.3.28 回扫看门狗:顺带把「最久没被扫描」的池成员拉进来一起查价。
+            # 实测 B 池 1116 件里 952 件超 3 天没被碰过 —— 只靠 10 个 sort 轮转永远轮不到。
+            stale_rows, stale_ids = await _fetch_stale_pool_rows(cfg, store)
             await _ensure_price_ranges(engine, store, cfg,
-                                       [r.get("good_id") for r in rows or []])
+                                       [r.get("good_id") for r in (rows_a or []) + stale_rows])
+            rows = list(rows_a or [])
             if rows:
                 hydrated = await _hydrate_pool_names(
                     api, store, rows, POOL_A, hydrate_limit, bucket)
                 if hydrated:
                     rows = await store.async_list_watch_pool(
                         pool=POOL_A, limit=max(cfg.a_size, batch_limit))
+            if stale_rows:
+                seen = {int(r.get("good_id") or 0) for r in rows}
+                for r in stale_rows:
+                    gid = int(r.get("good_id") or 0)
+                    if gid and gid not in seen:
+                        rows.append(r)
+                        seen.add(gid)
+            if rows:
                 named = [r for r in rows if (r.get("market_hash_name") or "").strip()]
                 if named:
                     # A 池通常不超过 800 件;若超出上限,轮转而不是每轮偏置前缀。
@@ -1306,9 +1318,17 @@ async def anomaly_a_track_loop(cfg: AnomalyConfig, api: Any, store: SnapshotStor
                             if carry is not None:
                                 result.details["data_incomplete"] = "buy_carried_forward"
                             results.append(result)
+                        total = len(results)
                         await pool_mgr.sync(results, mhn_map=mhn_map)
-                        await _persist_events(cfg, store, results, "A")
-                        logger.info("[ANOMALY] A 池跟踪完成 items=%d", len(results))
+                        # 回扫批只刷新池数据;推送仍归 A 成员与 B 发现扫描,
+                        # 否则一次性回扫 200 件会把群刷成流水账。
+                        if stale_ids and not bool(getattr(cfg, "rescan_push_enable", False)):
+                            pushable = [r for r in results if r.good_id not in stale_ids]
+                        else:
+                            pushable = results
+                        await _persist_events(cfg, store, pushable, "A")
+                        logger.info("[ANOMALY] A 池跟踪完成 items=%d(回扫 %d,推送候选 %d)",
+                                    total, len(stale_ids), len(pushable))
             
         except asyncio.CancelledError:
             raise
@@ -1458,6 +1478,54 @@ async def anomaly_s_scan_loop(cfg: AnomalyConfig, api: Any, store: SnapshotStore
         await asyncio.sleep(max(5, cfg.s_interval_sec))
 
 
+async def _fetch_stale_pool_rows(cfg: AnomalyConfig, store: SnapshotStore
+                                 ) -> Tuple[List[Dict[str, Any]], set]:
+    """取「超时没被扫描」的 B 池成员一起回扫,返回 (行, good_id 集合)。
+
+    为什么由 A 跟踪循环来扛:它是池内品唯一的高频查价通道(3 分钟一轮),
+    B 深翻按 sort 轮转(10 个 sort × 18 分钟一圈),长尾成员永远排不上号。
+    这里按 last_update 最旧优先取,每轮限量,刷完自然退出队列。
+    """
+    hours = int(getattr(cfg, "stale_rescan_hours", 0) or 0)
+    limit = int(getattr(cfg, "stale_rescan_per_cycle", 0) or 0)
+    if hours <= 0 or limit <= 0:
+        return [], set()
+    try:
+        rows = await store.async_list_stale_watch_pool(hours, limit, pool=POOL_B)
+    except Exception as exc:
+        logger.warning("[ANOMALY] 回扫队列读取失败: %s", exc)
+        return [], set()
+    rows = [r for r in rows if (r.get("market_hash_name") or "").strip()]
+    ids = {int(r.get("good_id") or 0) for r in rows}
+    if rows:
+        logger.info("[ANOMALY] 回扫看门狗:本轮补扫 %d 件(>%dh 未更新)", len(rows), hours)
+    return rows, ids
+
+
+async def _sink_stale_members(cfg: AnomalyConfig, store: SnapshotStore) -> None:
+    """沉底:池子占用超过阈值时,把「进池够久且历史最高分从未达标」的 B 成员清出。
+
+    口径刻意保守 —— 用 best_score(历史最高)而不是当前分,并且只在池子接近
+    容量上限时触发。目的不是「池越小越好」,而是别让从没冒过信号的成员长期
+    占着发现层的名额,把新候选挤掉。
+    """
+    days = int(getattr(cfg, "stale_sink_days", 0) or 0)
+    b_size = int(getattr(cfg, "b_size", 0) or 0)
+    if days <= 0 or b_size <= 0:
+        return
+    ratio = float(getattr(cfg, "stale_sink_trigger_ratio", 0.8) or 0.8)
+    counts = await store.async_count_watch_pool()
+    occupied = int(counts.get(POOL_B, 0))
+    if occupied < b_size * ratio:
+        return
+    per_cycle = max(1, int(getattr(cfg, "stale_sink_per_cycle", 50) or 50))
+    removed = await store.async_purge_stale_watch_pool(
+        days, float(cfg.b_to_a), per_cycle, POOL_B)
+    if removed:
+        logger.info("[WATCH] B 沉底 %d 件(%d 天从未达 %.0f 分,占用 %d/%d)",
+                    len(removed), days, cfg.b_to_a, occupied, b_size)
+
+
 async def anomaly_cleanup_loop(cfg: AnomalyConfig, store: SnapshotStore) -> None:
     """清理:降级超时的 S 池成员、删除过期异动事件。"""
     logger.info("[ANOMALY] 清理任务已开启")
@@ -1465,6 +1533,7 @@ async def anomaly_cleanup_loop(cfg: AnomalyConfig, store: SnapshotStore) -> None
         try:
             rows = await store.async_list_watch_pool(pool=POOL_S, limit=cfg.s_size * 2)
             now = datetime.now()
+            rearm_min = max(0, int(getattr(cfg, "s_rearm_minutes", 45)))
             for r in rows:
                 entered = _parse_dt(r.get("enter_time"))
                 if entered and (now - entered) > timedelta(minutes=cfg.s_max_minutes):
@@ -1474,6 +1543,9 @@ async def anomaly_cleanup_loop(cfg: AnomalyConfig, store: SnapshotStore) -> None
                         "market_hash_name": r.get("market_hash_name") or "",
                         "pool": POOL_A,
                         "score": float(r.get("score") or 0),
+                        # V0.3.28:降级也要重置 enter_time,否则下次升回 S 时
+                        # TTL 立刻又是"已过期",立刻再被踢下来 → 抖动。
+                        "enter_time": now.strftime("%Y-%m-%d %H:%M:%S"),
                         "last_update": now.strftime("%Y-%m-%d %H:%M:%S"),
                         "last_push_at": r.get("last_push_at"),
                         "cooldown_until": r.get("cooldown_until"),
@@ -1481,8 +1553,14 @@ async def anomaly_cleanup_loop(cfg: AnomalyConfig, store: SnapshotStore) -> None
                         "quiet_count": 0,
                         "last_score": float(r.get("last_score") or 0),
                         "anomaly_buy_low_since": r.get("anomaly_buy_low_since"),
+                        "s_rearm_at": ((now + timedelta(minutes=rearm_min))
+                                       .strftime("%Y-%m-%d %H:%M:%S") if rearm_min else None),
+                        "best_score": float(r.get("best_score") or 0),
                     }])
                     logger.info("[WATCH] S -> A item=%s reason=ttl", r.get("name"))
+            # V0.3.28 沉底:池子快满时,清掉「进池多日从没达标」的占位成员,
+            # 把容量让给新候选(不满就不删 —— 空池乱清没有收益)。
+            await _sink_stale_members(cfg, store)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
