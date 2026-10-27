@@ -214,6 +214,23 @@ ok("删掉的行确实没了", row_of(tmp5, 501) is None)
 removed2 = st5.purge_stale_watch_pool(7, 52.0, 50, POOL_B)
 ok("重复执行幂等(第二次没有可删的)", removed2 == [], removed2)
 
+# ------------------------------------------------ [7] 回扫打点,防重复回扫
+print("\n[7] 回扫过的品要打时间戳,否则每轮重复回扫")
+st6, tmp6 = fresh_store()
+put(tmp6, good_id=601, name="回扫品A", pool=POOL_B,
+    last_update=fmt(datetime.now() - timedelta(days=5)))
+put(tmp6, good_id=602, name="回扫品B", pool=POOL_B,
+    last_update=fmt(datetime.now() - timedelta(days=5)))
+stale_before = st6.list_stale_watch_pool(24, 10, pool=POOL_B)
+ok("打点前两件都在回扫队列", len(stale_before) == 2, len(stale_before))
+touched = st6.touch_watch_pool([601])
+ok("只打点指定的那一件", touched == 1, touched)
+stale_after = st6.list_stale_watch_pool(24, 10, pool=POOL_B)
+ok("打点过的已出队,另一件还在", [r["good_id"] for r in stale_after] == [602],
+   [r["good_id"] for r in stale_after])
+ok("空列表安全", st6.touch_watch_pool([]) == 0)
+ok("不存在的 good_id 安全", st6.touch_watch_pool([999999]) == 0)
+
 print("\n" + "=" * 80)
 print(f"结果: 通过 {PASS} / 失败 {FAIL}")
 print("=" * 80)

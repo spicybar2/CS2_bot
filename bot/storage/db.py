@@ -1636,6 +1636,32 @@ class SnapshotStore:
                                          ) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(self.list_stale_watch_pool, hours, limit, pool)
 
+    def touch_watch_pool(self, good_ids: List[int], ts: Optional[str] = None) -> int:
+        """只刷新 last_update(表示「这一轮真的看过它了」)。
+
+        回扫时有些品能查到价、却因为缺求购基线等原因没进评分,``sync`` 不会碰它们,
+        于是 last_update 停在几天前 → 下一轮又排到队首,同一批品被反复回扫、白烧额度。
+        """
+        ids = [int(g) for g in dict.fromkeys(good_ids or []) if int(g or 0) > 0]
+        if not ids:
+            return 0
+        stamp = ts or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        touched = 0
+        with self._lock, self._connect() as conn:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                cur = conn.execute(
+                    f"UPDATE watch_pool SET last_update=? WHERE good_id IN ({ph})",
+                    [stamp, *chunk])
+                touched += int(cur.rowcount or 0)
+            conn.commit()
+        return touched
+
+    async def async_touch_watch_pool(self, good_ids: List[int],
+                                     ts: Optional[str] = None) -> int:
+        return await asyncio.to_thread(self.touch_watch_pool, good_ids, ts)
+
     def purge_stale_watch_pool(self, days: int, below_score: float, limit: int,
                                pool: str = "B") -> List[Tuple[int, str]]:
         """沉底:进池满 ``days`` 天、历史最高分从未到过 ``below_score`` 的成员移出池。

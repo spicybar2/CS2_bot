@@ -1249,6 +1249,7 @@ async def anomaly_a_track_loop(cfg: AnomalyConfig, api: Any, store: SnapshotStor
                     mhn_map: Dict[int, str] = {}
                     filtered_keys: List[Tuple[int, str]] = []
                     incomplete_count = 0
+                    polled_gids: List[int] = []
                     now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     for i in range(0, len(selected), 50):
                         chunk = selected[i:i + 50]
@@ -1277,6 +1278,7 @@ async def anomaly_a_track_loop(cfg: AnomalyConfig, api: Any, store: SnapshotStor
                                 continue
                             name = r.get("name") or ""
                             pending.append((gid, name, row, mhn))
+                            polled_gids.append(gid)
                             mhn_map[gid] = mhn
                     await _remove_scan_filtered(
                         store, filtered_keys, "A跟踪", scan_threshold)
@@ -1303,6 +1305,15 @@ async def anomaly_a_track_loop(cfg: AnomalyConfig, api: Any, store: SnapshotStor
                             await store.async_save_listing_history_batch(snap_rows)
                         except Exception as exc:
                             logger.warning("[ANOMALY] A 池跟踪快照落库失败: %s", exc)
+                        # 回扫过的品即便这一轮没进评分(缺求购基线等),也要打上
+                        # 「看过了」的时间戳,否则它会一直排在回扫队首被反复查价。
+                        if stale_ids:
+                            touch = [g for g in polled_gids if g in stale_ids]
+                            if touch:
+                                try:
+                                    await store.async_touch_watch_pool(touch, now_ts)
+                                except Exception as exc:
+                                    logger.warning("[ANOMALY] 回扫时间戳刷新失败: %s", exc)
                         results = []
                         for gid, snap in snap_by_gid.items():
                             hist = series.get(gid, [])
