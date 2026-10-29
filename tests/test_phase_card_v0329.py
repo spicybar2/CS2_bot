@@ -233,6 +233,10 @@ def test_bid_lift():
               "39.7" in txt and "20.1" in txt, txt)
         check("统计带扣去手续费后赚钱概率", "扣去手续费后赚钱概率" in txt and "2.56" in txt, txt)
         check("不印 T+24h（建仓按 7 天持有看）", "T+24h" not in txt, txt)
+        # 三个概念各占一行、各自带标签：上涨率(概率)、扣费后赚钱概率(概率)、典型涨跌(幅度)
+        check("上涨率单独一行带标签", "上涨率　39.7%" in txt, txt)
+        check("典型涨跌单独一行带标签", "典型涨跌　-1.22%" in txt, txt)
+        check("说明「涨 0.1% 也算涨」", "涨 0.1% 也算涨" in txt, txt)
         check("不用「中位」这种统计黑话", "中位" not in txt, txt)
         check("低位不再堆重复尾注", phase_rules.footer("accum+lift", "低位") == "")
         check("盘中行显示求购价上移", any("上移" in ln for ln in sig.lines),

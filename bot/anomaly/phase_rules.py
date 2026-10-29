@@ -323,14 +323,23 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
                else f"{n:,} 例")
     lines = [f"　{scope_txt}（现价 {tier}）{_sample}"]
 
-    # ---- 扣费后赚钱概率：真正能落袋的概率，带同位置基准做参照 ----
     # 24h 只在「持有周期本来就是 24 小时」的阶段（启动）才印，其余只给 T+7。
+    # 每个数单独一行、带自己的标签 —— 之前把「上涨率 / 幅度 / 扣费后幅度」挤在一行里，
+    # 老大直接问「这是上涨率还是幅度还是胜率」，说明混排就是读不懂。
+    _show24 = bool(st.get("show_24h")) and st.get("up_24h") is not None
+
+    # 1) 上涨率：价格比今天高的比例（涨 0.1% 也算），是「方向」不是「赚没赚」
+    if _show24:
+        lines.append(f"　上涨率　T+24h {float(st['up_24h']):.1f}%｜T+7 {up:.1f}%（涨 0.1% 也算涨）")
+    else:
+        lines.append(f"　上涨率　{up:.1f}%（涨 0.1% 也算涨）")
+
+    # 2) 扣费后赚钱概率：涨过手续费门槛才算，是「赚没赚」
     w7, w24 = st.get("win_net_7d"), st.get("win_net_24h")
     bw7, bw24 = st.get("base_win_7d"), st.get("base_win_24h")
     if w7 is not None:
-        _show24 = bool(st.get("show_24h")) and w24 is not None
         _w = []
-        if _show24:
+        if _show24 and w24 is not None:
             _w.append(f"T+24h {float(w24):.1f}%")
         _w.append(f"T+7 {float(w7):.1f}%")
         _base = ""
@@ -340,12 +349,15 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
                 _base = f"（{_where} {float(bw24):.1f}% / {float(bw7):.1f}%）"
             else:
                 _base = f"（{_where} {float(bw7):.1f}%）"
-        lines.append(f"　扣去手续费后赚钱概率 " + "、".join(_w) + _base)
+        lines.append(f"　扣去手续费后赚钱概率　" + "｜".join(_w) + _base)
 
-    # ---- 上涨率 / 典型涨跌：不用「中位」这种统计黑话，直接说典型情况 ----
+    # 3) 典型涨跌：排正中间那次的幅度（不是概率），并列扣费后的同一数字
     net_med = st.get("net_med_7d")
     tail = f"（扣费后 {float(net_med):+.2f}%）" if net_med is not None else ""
-    lines.append(f"　T+7 上涨 {up:.1f}%、典型涨跌 {med:+.2f}%{tail}")
+    if _show24:
+        lines.append(f"　典型涨跌　T+24h {float(st['med_24h']):+.2f}%｜T+7 {med:+.2f}%{tail}")
+    else:
+        lines.append(f"　典型涨跌　{med:+.2f}%{tail}")
 
     # ---- 结论：由「相对基准的增量」和「扣费后正负」共同决定，不写死 ----
     if base_up is not None:
@@ -373,7 +385,7 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
             lines.append(f"　结论：{judge}")
     if n < 100:
         # 100 例以下不足以支撑 pp 级的结论，必须自曝样本量。
-        lines.append(f"　（样本仅 {n} 例，统计稳定性有限，仅作方向参考）")
+        lines.append(f"　（样本仅 {n} 次，统计稳定性有限，仅作方向参考）")
     return lines
 
 
