@@ -141,7 +141,8 @@ sig2 = detect_phase(snap, build_history(False), now, cfg, price_chg_60=0.4)
 ok("历史缺分平台字段时仍能判定", sig2 is not None and sig2.phase == "accum")
 if sig2:
     joined2 = "\n".join(sig2.lines)
-    ok("回退到合计口径", "求购(BUFF+悠悠)" in joined2 and "在售(BUFF+悠悠)" in joined2,
+    ok("回退到合计口径(总量行仍在)",
+       "求购量" in joined2 and "在售量" in joined2,
        joined2)
     ok("回退时不出现半截分平台行", "悠悠有品" not in joined2, joined2)
 
@@ -152,7 +153,7 @@ row = {"name": "测试品", "anomaly_type": "accum", "level": "L2", "price": 100
        "detail": "求购/在售比 0.10"}
 multi = {"buff_sell_num": 549, "yyyp_sell_num": 512}
 card = format_row_alert(row, market=None, mkt=None, multi=multi)
-ok("分平台在售行", "在售：BUFF 549  悠悠有品 512  合计 1,061" in card, card)
+ok("分平台在售行", "在售量　BUFF 549  悠悠有品 512　合计 1,061" in card, card)
 ok("旧合计写法消失", "≈ 1,061" not in card and "BUFF+悠悠在售：" not in card, card)
 
 # ---------- [6] 选品推荐行真的渲染盘口 ----------

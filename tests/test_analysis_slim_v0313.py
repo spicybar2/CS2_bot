@@ -202,7 +202,7 @@ row_plain = dict(row_split, reason="盘口 2 小时:\n　求购：BUFF +5 个(52
 card2 = format_row_alert(row_plain, market=None, mkt=None,
                          multi={"buff_sell_num": 564, "yyyp_sell_num": 516})
 ok("盘口块回退合计口径 → 仍补分平台在售行",
-   "在售：BUFF 564  悠悠有品 516  合计 1,080" in card2, card2)
+   "在售量　BUFF 564  悠悠有品 516　合计 1,080" in card2, card2)
 
 # ---------------------------------------------------------------- [10] 信息不丢
 print("\n[10] 关键信息一条不丢")

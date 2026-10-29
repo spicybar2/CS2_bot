@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
+from bot.anomaly import phase_rules
 from bot.csqaq.market_counts import (aggregate_buff_yyyp_sell, book_split_inline,
                                      book_split_line, normalize_book)
 
@@ -109,16 +110,69 @@ def _fmt_book(label: str, base: int, cur: int, pct: Optional[float]) -> str:
            f"{label} {base:,}→{cur:,}({cur - base:+,})"
 
 
+def _fmt_qty_line(label: str, base: int, cur: int, pct: Optional[float]) -> str:
+    """盘口总量行:先给「起点 → 终点 + 净增/净减 + 百分比」,人一眼能读懂方向。
+
+    旧写法把两个平台的增减并排给(「BUFF -1 个  悠悠有品 +15 个」),读者要自己
+    心算才知道总量是增是减。总量行在前、分平台明细在后,两层都不丢。
+    """
+    delta = int(cur) - int(base)
+    if delta > 0:
+        word = f"净增 {delta:,} 单"
+    elif delta < 0:
+        word = f"净减 {abs(delta):,} 单"
+    else:
+        word = "无变化"
+    pct_txt = "" if pct is None else f"　合计 {pct:+.1f}%"
+    return f"　{label}　{int(base):,} → {int(cur):,}　{word}{pct_txt}"
+
+
+def _fmt_price_line(chg: Optional[float]) -> str:
+    """最低售价行:方向词 + 百分比,不用读者判断 +0.0% 是涨是跌。"""
+    if chg is None:
+        return "　最低售价　数据不足"
+    if abs(chg) < 0.05:
+        return "　最低售价　持平（0.0%）"
+    word = "上涨" if chg > 0 else "下跌"
+    return f"　最低售价　{word}（{chg:+.1f}%）"
+
+
+def _build_reading(phase: str, position: str, pos_pct: Optional[float],
+                   buy_chg: Optional[float], sell_chg: Optional[float],
+                   price_chg: Optional[float], sell_now: int, buy_now: int,
+                   window_points: int, price: Any) -> List[str]:
+    """拼装「判读 + 历史参照」两段。
+
+    每句都由当时状态生成(位置分档 / 求购强度 / 价格方向 / 供给方向 / 采样点数),
+    历史参照按 `(阶段, 位置)` 查 phase_rules.STATS 并与同位置基准对照 ——
+    不出现与数据矛盾的固定结论。
+    """
+    ratio = (float(sell_now) / float(buy_now)) if buy_now else None
+    try:
+        price_f = float(price or 0)
+    except (TypeError, ValueError):
+        price_f = 0.0
+    out = ["▍判读"]
+    out.extend(f"　{x}" for x in phase_rules.reading(
+        phase, position, pos_pct, buy_chg, sell_chg, price_chg, ratio, window_points))
+    out.append(phase_rules.stat_as_of_line())
+    out.extend(phase_rules.stat_lines(phase, position, price_f))
+    return out
+
+
 @dataclass
 class PhaseSignal:
     """周期阶段信号。"""
 
     phase: str                       # accum / launch / distribute
-    title: str                       # 建仓监测 / 启动确认 / 派发预警
+    title: str                       # 由位置决定:低位吸筹迹象 / 建仓迹象 / 高位诱多预警
     icon: str                        # 👁 / 🚀 / 🚨
     floor_score: float               # 评分下限(确保推送等级)
     reasons: List[str] = field(default_factory=list)
     lines: List[str] = field(default_factory=list)   # 推送文案的窗口盘口对比块
+    position: str = ""               # 低位 / 中位 / 高位(近 N 日区间分位分档)
+    pos_pct: Optional[float] = None  # 区间分位 0~100(缺失为 None)
+    reading: List[str] = field(default_factory=list)  # 判读 + 历史参照(整段文案)
 
 
 def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
@@ -166,16 +220,24 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
     base_book, cur_book = normalize_book(p60), normalize_book(snap)
     _split_buy = book_split_line(base_book, cur_book, "buy")
     _split_sell = book_split_line(base_book, cur_book, "sell")
-    _sum_txt = f"　合计 {buy_chg60:+.1f}%" if buy_chg60 is not None else ""
     book_lines = [
-        f"盘口 {window_label}:",
-        (f"　{_split_buy}{_sum_txt}" if _split_buy
-         else f"　{_fmt_book('求购(BUFF+悠悠)', buy_60, buy_now, buy_chg60)}"),
-        (f"　{_split_sell}" + (f"　合计 {sell_chg60:+.1f}%" if sell_chg60 is not None else "")
-         if _split_sell
-         else f"　{_fmt_book('在售(BUFF+悠悠)', sell_60, sell_now, sell_chg60)}"),
-        f"　价格 {window_minutes / 60:g}h: {price_chg_60:+.1f}%" if price_chg_60 is not None else f"　价格 {window_minutes / 60:g}h: N/A",
+        f"▍盘口变动（近 {window_label}）",
+        _fmt_qty_line("求购量", buy_60, buy_now, buy_chg60),
+        _fmt_qty_line("在售量", sell_60, sell_now, sell_chg60),
+        _fmt_price_line(price_chg_60),
     ]
+    # 分平台明细只作补充:总量行已经给出方向,这一层是给要核对 BUFF/悠悠 差异的人看。
+    if _split_buy:
+        book_lines.append(f"　{_split_buy}")
+    if _split_sell:
+        book_lines.append(f"　{_split_sell}")
+
+    # 区间位置(V0.3.29):决定阶段信号含义的主变量 —— 同一句「求购 +15.6%」,
+    # 低位是吸筹迹象、高位是诱多预警。分档阈值与回测脚本 tools/probe_accum_states.py 一致。
+    pos_pct = phase_rules.range_pct(range_30d, snap.price)
+    position = phase_rules.pos_of(pos_pct)
+    # 窗口内实际采样点数:采样稀疏时趋势判断可靠性下降,卡片需要如实说明。
+    window_points = sum(1 for h in history if h.ts >= p60.ts)
 
     # ---- 假买墙过滤(配套,必做):求购增但价格下跌 + 在售暴增 = 挂单诱多 ----
     if (buy_chg60 is not None and buy_chg60 >= cfg.accum_buy_pct_min
@@ -205,8 +267,9 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
             and sell_chg60 is not None and sell_chg60 >= cfg.distrib_sell_pct
             and abs(sell_now - sell_60) >= sell_abs_req
             and stall):
+        _icon, _title = phase_rules.headline("distribute", position)
         return PhaseSignal(
-            phase="distribute", title="派发预警", icon="🚨",
+            phase="distribute", title=_title, icon=_icon,
             floor_score=cfg.phase_score_distrib,
             reasons=[
                 high_txt,
@@ -215,7 +278,10 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
                 + (f"({book_split_inline(base_book, cur_book, 'sell')})" if _split_sell else ""),
                 "求购停滞" if stall else "",
             ],
-            lines=book_lines)
+            lines=book_lines, position=position, pos_pct=pos_pct,
+            reading=_build_reading("distribute", position, pos_pct, buy_chg60,
+                                   sell_chg60, price_chg_60, sell_now, buy_now,
+                                   window_points, snap.price))
 
     # ---- ② 启动确认(求购价上移 + 价格跟涨) ----
     # V0.3.0 补四道锁(实测:启动是唯一「T+24h 起超额就为负、逐窗单调恶化」的阶段,
@@ -248,13 +314,17 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
         else:
             reason = (f"求购价上移 {bp_chg60:+.1f}%,价格跟涨 {price_chg_60:+.1f}%"
                       f"(无吸筹期记录,疑似消息/事件驱动,持续性存疑)")
+        _icon, _title = phase_rules.headline("launch", position)
         return PhaseSignal(
-            phase="launch", title="启动确认", icon="🚀",
+            phase="launch", title=_title, icon=_icon,
             floor_score=cfg.phase_score_launch,
             reasons=[reason,
                      f"逐段走高确认(求购价与价格窗口内未回落),在售 {sell_chg60:+.1f}% 未暴增"
                      if sell_chg60 is not None else "逐段走高确认(求购价与价格窗口内未回落)"],
-            lines=book_lines)
+            lines=book_lines, position=position, pos_pct=pos_pct,
+            reading=_build_reading("launch", position, pos_pct, buy_chg60,
+                                   sell_chg60, price_chg_60, sell_now, buy_now,
+                                   window_points, snap.price))
 
     # ---- ① 建仓监测(吸筹期:价格横盘是前提;V0.3.0 连续式绝对量 + 横盘金额豁免) ----
     abs_req = _abs_req(cfg, buy_60, cfg.accum_buy_pct_min)
@@ -283,15 +353,21 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
             accum_reasons.append(
                 f"横盘按金额豁免:{price_abs_delta:+.2f} 元 ≤ ¥{quiet_abs:g}"
                 f"(低价品百分比噪声)")
+        # V0.3.29:旧的写死尾注(「n=34 / +2.2pp」式自曝)默认关闭,改由卡片「历史参照」段
+        # 按 (位置, 现价档) 查表给出可核对的统计;配置里填了才追加这一行。
         accum_lines = list(book_lines)
         note = str(getattr(cfg, "phase_accum_note", "") or "")
         if note:
             accum_lines.append(f"　{note}")
+        _icon, _title = phase_rules.headline("accum", position)
         return PhaseSignal(
-            phase="accum", title="建仓监测", icon="👁",
+            phase="accum", title=_title, icon=_icon,
             floor_score=cfg.phase_score_accum,
             reasons=accum_reasons,
-            lines=accum_lines)
+            lines=accum_lines, position=position, pos_pct=pos_pct,
+            reading=_build_reading("accum", position, pos_pct, buy_chg60,
+                                   sell_chg60, price_chg_60, sell_now, buy_now,
+                                   window_points, snap.price))
 
     return None
 
@@ -433,10 +509,13 @@ async def run_cycle_watch(cfg, store: SnapshotStore, client, cycle_rows, prices,
         if (until and now < until and str(cd.get("last_type") or "") == sig.phase):
             continue
         minutes = minutes_by_phase.get(sig.phase, 30)
+        # V0.3.29:position 写真实区间分档(此前写死 "—",卡片一直显示兜底值「中位」);
+        # detail 用新的「判读 + 历史参照」整段文案,reasons 保留作诊断/评分记录。
+        _detail = "\n".join(sig.reading) if sig.reading else " / ".join(sig.reasons)
         row = {"anomaly_type": sig.phase, "level": ("L3" if sig.phase == "distribute" else "L2"),
                "name": zh, "price": float(pd.get("buffSellPrice") or 0),
-               "score": sig.floor_score, "position": "—",
-               "reason": "\n".join(sig.lines), "detail": " / ".join(sig.reasons)}
+               "score": sig.floor_score, "position": sig.position or "—",
+               "reason": "\n".join(sig.lines), "detail": _detail}
         alert = _format_phase_alert(row)
         uid = r.get("user_openid") or ""
         delivered = False

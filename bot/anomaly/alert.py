@@ -14,6 +14,7 @@ import time
 from typing import Any, Dict, Optional
 
 from bot.analyzer.price_action import analyze_price_action, format_price_action_block
+from bot.anomaly import phase_rules
 from bot.anomaly.market_sentiment import archive_sentiment   # V0.3.17 情绪按日归档
 from bot.csqaq.client import CSQAQClient
 
@@ -195,60 +196,50 @@ async def fetch_market_snapshot(csqaq_cfg: Any,
 
 
 
-_PHASE_META = {
-    "accum": {"icon": "👁", "title": "建仓监测",
-              "t7": "T+7 视角: 价格未启动=埋伏观察窗;若后续求购价上移+价格跟涨,则确认启动"},
-    "launch": {"icon": "🚀", "title": "启动确认",
-               "t7": "T+7 视角: 抬价启动;若此前有吸筹记录则链条成立,持续性更强"},
-    "distribute": {"icon": "🚨", "title": "派发预警",
-                   "t7": "T+7 持有者: 建议 7 天冷却期内择机出货;未持有者暂缓追入"},
-}
-
-
 def _format_phase_alert(r: Dict[str, Any], market: Optional[str] = None,
                         multi: Optional[Dict[str, Any]] = None) -> str:
-    """周期阶段事件文案(V0.2.0,老大确认格式):核心=盘口 1 小时对比块。"""
-    meta = _PHASE_META.get(r.get('anomaly_type') or '', _PHASE_META['accum'])
-    level = r.get('level') or 'L2'
+    """周期阶段事件文案(V0.3.29)。
+
+    标题/图标/尾注由 `(阶段, 位置)` 查 phase_rules 决定 —— 同一句「求购 +15.6%」
+    在低位是「低位吸筹迹象」、在高位是「高位诱多预警」,不会出现报喜标题配利空正文。
+    「判读 + 历史参照」整段由 detect_phase 按当时状态生成,这里只负责排版。
+    """
+    ptype = r.get('anomaly_type') or 'accum'
+    pos = str(r.get('position') or '').strip()
+    if pos in ('', '—', '-'):
+        pos = ''            # 旧事件没有位置:标题与尾注回退到最保守的中位口径
+    icon, title = phase_rules.headline(ptype, pos or '中位')
     price = float(r.get('price') or 0)
-    score = float(r.get('score') or 0)
-    pos = r.get('position') or '中位'
     lines = [
-        f"{meta['icon']} {meta['title']} [{level}]",
+        f"{icon} {title}",
         '',
         r.get('name') or '',
-        f"当前售价：¥{price:,.0f}",
+        f"现价 ¥{price:,.0f}",
         '━━━━━━━━━━━━━━',
     ]
-    # 盘口 1 小时对比块(落库时写入 reason,多行)
     block = str(r.get('reason') or '').strip()
     if block:
         lines.append(block)
-    feature = str(r.get('detail') or '').strip()
-    if feature:
-        lines.append(f"特征: {feature.replace(' / ', '; ')}")
-    lines.append('━━━━━━━━━━━━━━')
-    lines.append(f"位置：{pos}")
-    if market:
-        lines.append(market)
-    if multi and "在售：" not in block:
-        # V0.3.12:由「BUFF+悠悠在售：BUFF 549 + 悠悠 512 ≈ 1,061」改为分平台并列,
-        # 免得读成"两家相加的一个数"。变化量在 reason 的盘口块里逐平台给。
-        # V0.3.13:盘口块已有「在售：BUFF -3 个(567→564) 悠悠有品 +4 个(512→516)」时,
-        # 当前值就在括号里,再单列一行「在售：BUFF 564 悠悠有品 516」= 同一份数据说两遍
-        # (老大反馈推送也太啰嗦)。只有盘口块回退成合计口径时才补这一行。
+    detail = str(r.get('detail') or '').strip()
+    if detail:
+        lines.append(detail)
+    if multi and '在售' not in block:
+        # 只在盘口块完全缺失时补一条在售合计,避免同一份数据说两遍。
         _MP = (("buff_sell_num", "BUFF"), ("yyyp_sell_num", "悠悠有品"))
-        segs = []
-        total = 0
+        segs, total = [], 0
         for key, tag in _MP:
             v = int(multi.get(key) or 0)
             total += v
             if v > 0:
                 segs.append(f"{tag} {v:,}")
         if segs:
-            lines.append(f"在售：{'  '.join(segs)}  合计 {total:,}")
-    lines.append(f"异动评分：{score:.0f}/100")
-    lines.append(f"⚠️ {meta['t7']}")
+            lines.append(f"在售量　{'  '.join(segs)}　合计 {total:,}")
+    lines.append('━━━━━━━━━━━━━━')
+    if pos:
+        lines.append(f"近 30 日位置　{pos}")
+    if market:
+        lines.append(market)
+    lines.append(phase_rules.footer(ptype, pos or '中位'))
     lines.append('仅供观察，不构成买卖建议')
     return '\n'.join(lines)
 

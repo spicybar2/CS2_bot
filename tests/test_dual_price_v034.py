@@ -16,6 +16,7 @@ _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent.parent))
 import os
 import sys
 import tempfile
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -143,15 +144,18 @@ def test_db_roundtrip():
     if os.path.exists(tmp):
         os.remove(tmp)
     store = SnapshotStore(tmp)
+    # V0.3.29:时间戳必须用「现在」—— save_listing_history_batch 会按 30 天滚动清理,
+    # 原先写死的 2026-09-28 到期后被当轮 DELETE 清掉,导致断言读到空行(用例假失败)。
+    _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     store.save_listing_history_batch([{
-        "good_id": 1, "name": "双平台品", "ts": "2026-09-28 10:00:00",
+        "good_id": 1, "name": "双平台品", "ts": _ts,
         "buff_sell_num": 10, "steam_sell_num": 1, "buff_buy_num": 2, "steam_buy_num": 0,
         "buff_sell_price": 100.0, "buff_buy_price": 90.0,
         **dual_price_columns({"buff_sell_price": 100.0, "yyyp_sell_price": 98.0,
                               "buff_buy_price": 90.0, "yyyp_buy_price": 92.0}),
     }, {
         # 旧调用路径:完全不传任何新列(迁移后老代码/老数据场景)
-        "good_id": 2, "name": "老路径品", "ts": "2026-09-28 10:00:00",
+        "good_id": 2, "name": "老路径品", "ts": _ts,
         "buff_sell_num": 5, "steam_sell_num": 0, "buff_buy_num": 1, "steam_buy_num": 0,
         "buff_sell_price": 60.0,
     }])

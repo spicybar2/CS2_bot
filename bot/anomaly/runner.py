@@ -1022,8 +1022,13 @@ async def _persist_events(cfg: AnomalyConfig, store: SnapshotStore,
         # 周期阶段事件:reason 用「盘口 1 小时」对比块(起点→终点),推送文案直接展示
         phase_info = d.get("phase") or {}
         phase_lines = phase_info.get("lines") or []
+        phase_reading = phase_info.get("reading") or []
         reason_text = ("\n".join(phase_lines) if phase_lines
                        else (" + ".join(r.reasons) if r.reasons else ""))
+        # V0.3.29:阶段事件的 detail 用新的「判读 + 历史参照」整段文案(每句由状态生成),
+        # 不再把评分诊断串(reasons)拼成一行人话。
+        detail_text = ("\n".join(phase_reading) if phase_reading
+                       else (" / ".join(r.reasons) if r.reasons else ""))
         out.append({
             "good_id": r.good_id,
             "name": r.name,
@@ -1034,7 +1039,7 @@ async def _persist_events(cfg: AnomalyConfig, store: SnapshotStore,
             "sell_prev": 0,
             "sell_cur": int(d.get("sell_num") or 0),
             "level": r.level,
-            "detail": " / ".join(r.reasons) if r.reasons else "",
+            "detail": detail_text,
             "score": r.score,
             "pool": tag,
             "price": float(d.get("price") or 0),

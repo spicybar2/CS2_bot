@@ -357,9 +357,10 @@ class AnomalyConfig:
     phase_bonus_accum: float = 45.0    # 建仓:11.3+45≈56(刚过 L2);5+45=50(不推)
     phase_bonus_launch: float = 45.0   # 启动:同建仓(实测表现最差,不额外加码)
     phase_bonus_distrib: float = 65.0  # 派发:6.4+65≈71(过 L3=70);0+65=65(不推)
-    # 建仓推送尾注(空字符串 = 关闭):实测该指纹 T+24h 相对大盘略优、T+7d 转负,避免误导成"低位埋伏"
-    phase_accum_note: str = ("短线提示:历史实测(17 天/n=34)本指纹 T+1 日相对大盘 +2.2pp、"
-                             "T+7 日 -5.9pp,按短线看待,别当低位长线埋伏")
+    # V0.3.29:建仓尾注**默认关闭**。原先写死「n=34 / T+1 +2.2pp / T+7 -5.9pp」的提示,
+    # 一是样本太小不该当结论,二是与卡片「历史参照」段(按位置分档、2,483 例)重复且口径不同。
+    # 需要临时加一句话时填这里,留空即不显示。
+    phase_accum_note: str = ""
 
     # 异动推送目标群白名单(V0.2.0:暂时只对 1105775575 开放);空 = 沿用 vip_only 规则
     push_group_openids: List[str] = field(default_factory=list)

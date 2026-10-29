@@ -1,4 +1,4 @@
-﻿"""AnomalyEngine:饰品异动评分与类型判定(PRD V1.0)。
+"""AnomalyEngine:饰品异动评分与类型判定(PRD V1.0)。
 
 四条硬原则(不得违反):
 1. 数据优先:单品详情有新鲜 Steam 成交量时使用真实成交数量；缺失/过期时**不伪造成交量**。
@@ -751,8 +751,15 @@ class AnomalyEngine:
             details["phase"] = {
                 "phase": phase_sig.phase,
                 "title": phase_sig.title,
+                "icon": phase_sig.icon,
                 "lines": phase_sig.lines,
+                "reading": phase_sig.reading,
+                "pos_pct": phase_sig.pos_pct,
             }
+            # V0.3.29:阶段事件的位置用**区间分位**判定(低位/中位/高位),覆盖引擎原先
+            # 按「涨跌幅 ±8%」算的同名口径 —— 后者把「涨过又跌回来」误判成高位。
+            if phase_sig.position:
+                details["position"] = phase_sig.position
             reasons.extend(r for r in phase_sig.reasons if r)
         else:
             atype_override = None

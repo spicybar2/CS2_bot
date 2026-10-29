@@ -301,7 +301,9 @@ def test_watch_cycle() -> None:
 
     first, second, text = asyncio.run(run())
     check("周期命中推送 1 条", first == 1, f"pushed={first}")
-    check("推送含建仓标题", "建仓监测" in text and "盘口 1 小时" in text, text[:40].replace("\n", "|"))
+    # V0.3.29:标题按「阶段 + 位置」决定(建仓迹象/低位吸筹迹象/高位诱多预警),
+    # 盘口块标题统一为「▍盘口变动（近 X 小时）」。
+    check("推送含建仓标题", "迹象" in text and "▍盘口变动" in text, text[:40].replace("\n", "|"))
     # V0.3.12: 盘口块改为**分平台**展示(BUFF / 悠悠有品 各自的变化量与当前值);
     # 只有历史或快照缺分平台字段时才回退到 V0.2.24 的合计标注。
     check("推送盘口块为分平台格式",

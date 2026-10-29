@@ -1112,12 +1112,12 @@ class CS2BotClient(botpy.Client):
                     "该品不在雷达持续采样范围，想要 2 小时粒度请 /关注 它（每 15 分钟一个点）。"
                 )
             elif phase_sig is not None:
-                phase_title = {
-                    "accum": "疑似分批建仓（吸筹期，价格未启动）。",
-                    "launch": "出现启动确认迹象（抬价抢货）。",
-                    "distribute": "疑似派发（高位供给释放）。",
-                }.get(phase_sig.phase, "出现周期阶段迹象。")
-                phase_lines.append(phase_title)
+                # V0.3.29:标题按「阶段 + 区间位置」取,不再固定说「吸筹期」——
+                # 高位求购堆积是诱多,与低位吸筹含义相反。
+                _pos = phase_sig.position or ""
+                phase_lines.append(
+                    f"{phase_sig.title}" + (f"（近 30 日区间{_pos}）" if _pos else "") + "。"
+                )
                 phase_lines.extend(line.strip() for line in phase_sig.lines[1:])
             elif digest:
                 phase_lines.extend(["供给消化中（方向尚未选择）。", digest])

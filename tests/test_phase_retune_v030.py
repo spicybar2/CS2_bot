@@ -92,9 +92,17 @@ def test_accum_threshold():
           sig12 is not None and sig12.phase == "accum",
           str(sig12.phase if sig12 else None))
     check("门槛写进原因文案", sig12 is not None and any("12%" in r for r in sig12.reasons))
-    check("建仓文案带短线提示(V0.3.0 新增)",
-          sig12 is not None and any("短线提示" in ln for ln in sig12.lines),
+    # V0.3.29:尾注默认关闭 —— 原先写死的「n=34 / T+1 +2.2pp」是小样本自曝,
+    # 已由卡片的「历史参照」段(按位置分档、2,483 例)取代。配置里填了才显示。
+    check("建仓文案默认不再带写死的短线提示",
+          sig12 is not None and not any("短线提示" in ln for ln in sig12.lines),
           str(sig12.lines[-1] if sig12 and sig12.lines else None))
+    from dataclasses import replace as _replace
+    sig_note = detect_phase(snap(buy=1140), h12, BASE,
+                            _replace(CFG, phase_accum_note="自定义尾注"))
+    check("配置里填了尾注才显示",
+          sig_note is not None and any("自定义尾注" in ln for ln in sig_note.lines),
+          str(sig_note.lines[-1] if sig_note and sig_note.lines else None))
 
     # 低价品:¥6 品涨 ¥0.24(+4%)—— 百分比拆穿不了报价台阶,靠金额豁免仍判横盘
     h_low = hist([100, 103, 106, 109, 112, 115, 118, 121, 124, 127, 130, 133, 136],
