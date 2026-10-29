@@ -116,7 +116,9 @@ def test_same_signal_three_positions():
           "不说明有资金进场" in low and "诱多" not in low, low)
     check("高位结论说「诱多」", "诱多" in high and "不说明有资金进场" not in high, high)
     check("中位结论说「难以区分」", "难以区分" in mid)
-    check("低位尾注不再承诺「等企稳介入」", "不构成买点" in card_of(
+    check("低位卡不再堆尾注(结论段已说完)", "不构成买点" not in card_of(
+        detect_phase(snap(), HIST, BASE, CFG, price_chg_60=0.0, range_30d=(60.0, 200.0))))
+    check("低位结论仍给出否定判断", "仍非正期望" in card_of(
         detect_phase(snap(), HIST, BASE, CFG, price_chg_60=0.0, range_30d=(60.0, 200.0))))
     check("高位尾注:不建议介入", "不建议介入" in card_of(
         detect_phase(snap(), HIST, BASE, CFG, price_chg_60=0.0, range_30d=(60.0, 110.0))))
@@ -134,7 +136,7 @@ def test_card_hygiene():
     check("无 pp 缩写堆砌", card.count("pp") <= 2)
     check("统计段带「统计截至」", "统计截至" in card)
     check("统计段给出样本量与涨跌", "例" in card and "中位" in card)
-    check("统计段带同位置基准对照", "对照" in card)
+    check("统计段带同位置基准对照", "基准" in card)
     check("仍无成交量类词", not any(w in card for w in ("成交量", "放量", "缩量", "天量")))
     check("保留免责句", "不构成买卖建议" in card)
 
@@ -225,8 +227,11 @@ def test_bid_lift():
         txt = "\n".join(sig.reading)
         check("判读点明「抬价收货」", "抬价收货" in txt, txt)
         check("判读写明求购价上移幅度", "上移" in txt, txt)
-        check("统计用抬价组(39.7%/44.2%)", "39.7" in txt and "44.2" in txt, txt)
-        check("尾注不承诺稳赚", "不是稳赚" in phase_rules.footer("accum+lift", "低位"))
+        check("统计用抬价组(上涨39.7%/扣费胜率20.1%)",
+              "39.7" in txt and "20.1" in txt, txt)
+        check("统计带扣费后赚钱概率", "扣费后赚钱概率" in txt and "2.56" in txt, txt)
+        check("不用「中位」这种统计黑话", "中位" not in txt, txt)
+        check("低位不再堆重复尾注", phase_rules.footer("accum+lift", "低位") == "")
         check("盘中行显示求购价上移", any("上移" in ln for ln in sig.lines),
               str(sig.lines))
 
@@ -235,7 +240,7 @@ def test_bid_lift():
     if sig_flat:
         txt2 = "\n".join(sig_flat.reading)
         check("未抬价版不讲抬价", "抬价收货" not in txt2, txt2)
-        check("未抬价版统计用 32.7%", "32.7" in txt2, txt2)
+        check("未抬价版统计用 32.8%", "32.8" in txt2, txt2)
         check("两种版本结论不同", txt2 != "\n".join(sig.reading) if sig else False)
 
 

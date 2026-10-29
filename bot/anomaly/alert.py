@@ -240,7 +240,14 @@ def _format_phase_alert(r: Dict[str, Any], market: Optional[str] = None,
         lines.append(f"位置　{pos}")
     if market:
         lines.append(market)
-    lines.append(phase_rules.footer(ptype, pos or '中位'))
+    # 阶段事件落库只有 anomaly_type,没有「求购价是否上移」这个维度;
+    # 而盘口块里的「最高求购价 ¥x 上移」是 cycle._fmt_buy_price_line 写死的固定格式,
+    # 据此还原抬价标记,尾注才能给出对应口径(否则抬价卡也会显示「仅略高于基准」)。
+    _lift = ("最高求购价" in block) and ("上移" in block)
+    _foot_phase = "accum+lift" if (ptype == "accum" and _lift) else ptype
+    _foot = phase_rules.footer(_foot_phase, pos or '中位')
+    if _foot:                       # 空尾注不占行（低位保持简洁，结论段已说完）
+        lines.append(_foot)
     lines.append('仅供观察，不构成买卖建议')
     return '\n'.join(lines)
 

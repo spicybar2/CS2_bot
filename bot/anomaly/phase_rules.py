@@ -37,54 +37,80 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 
 # ---------------------------------------------------------------- 统计参照
-# T+7 前瞻。n=样本数，up=上涨概率(%)，med=中位涨幅(%)，crash=跌超15%占比(%)。
-# price_tier：统计所限定的现价档位，低于该价位的品不适用。
+# 每条统计的字段：
+#   n / up / med      —— T+7 样本数、上涨率%、未扣费中位涨幅%
+#   n_24h / up_24h / med_24h —— T+24h 同口径
+#   base_up*          —— 同时点、同位置的**上涨率**基准（任意时刻，不看信号）
+#   win_net_7d / win_net_24h         —— **扣费胜率**：买入按最低售价、卖出扣 2.5% 手续费后仍赚钱的比例
+#   base_win_7d / base_win_24h       —— 同位置基准的扣费胜率（读者需要一个参照物）
+#   net_med_7d        —— 扣费后的 T+7 中位净收益%
+# 为什么区分「上涨率」和「扣费胜率」：涨 0% 是亏的（要付 2.5% 手续费），
+# 盈亏平衡点 = 1/(1-0.025)-1 = +2.56%。上涨率 39.7% 的形态，扣费后只有 20.1% 是赚的。
 STATS_AS_OF = "2026-10-29"
 
 # 键 = (阶段, 位置)；位置为 "*" 表示「不分位置」的合计样本。
-# 启动/派发没有按位置拆的样本量(启动 n≈19、派发 n≈59),硬凑三档等于伪造粒度,
-# 所以只给合计,并在文案里注明「不限位置」。
+# 启动/派发没有按位置拆的样本量，硬凑三档等于伪造粒度，所以只给合计。
 STATS: Dict[Tuple[str, str], Dict[str, object]] = {
-    # ---- 建仓：按位置分档（现价 ≥¥100，tools/probe_bid_lift.py 的 E 组）----
-    # 「进价未抬」= 求购量涨但最高求购价没动 —— 求购单不锁资金,这种堆积零成本,所以没有增量。
-    ("accum", "低位"): {"n": 4581, "up": 32.7, "med": -1.91, "crash": None,
-                        "tier": "≥¥100", "base_up": 31.6, "base_n": 57360,
-                        "up_24h": 36.2, "med_24h": -0.14, "base_up_24h": 34.1, "n_24h": 6402},
-    ("accum", "中位"): {"n": 2171, "up": 12.2, "med": -4.39, "crash": None,
-                        "tier": "≥¥100", "base_up": 11.3, "base_n": 27560,
-                        "up_24h": 21.7, "med_24h": -0.63, "base_up_24h": 22.8, "n_24h": 3214},
-    ("accum", "高位"): {"n": 840, "up": 6.0, "med": -5.78, "crash": None,
-                        "tier": "≥¥100", "base_up": 4.4, "base_n": 9508,
-                        "up_24h": 17.9, "med_24h": -0.39, "base_up_24h": 17.6, "n_24h": 942},
+    # ---- 建仓：按位置分档（现价 ≥¥100，tools/probe_net_winrate.py）----
+    # 「求购价未抬」= 求购量涨但最高求购价没动 —— 求购单不锁资金,这种堆积零成本,所以没有增量。
+    ("accum", "低位"): {"n": 4579, "up": 32.8, "med": -1.89, "crash": None,
+                        "tier": "≥¥100", "base_up": 31.6, "base_n": 57264,
+                        "up_24h": 36.5, "med_24h": -0.13, "base_up_24h": 34.3, "n_24h": 6453,
+                        "win_net_7d": 15.6, "win_net_24h": 13.5,
+                        "base_win_7d": 13.5, "base_win_24h": 9.6, "net_med_7d": -4.34},
+    ("accum", "中位"): {"n": 2185, "up": 12.3, "med": -4.39, "crash": None,
+                        "tier": "≥¥100", "base_up": 11.3, "base_n": 27768,
+                        "up_24h": 21.7, "med_24h": -0.63, "base_up_24h": 22.9, "n_24h": 3241,
+                        "win_net_7d": 3.4, "win_net_24h": 3.3,
+                        "base_win_7d": 2.7, "base_win_24h": 3.1, "net_med_7d": -6.78},
+    ("accum", "高位"): {"n": 830, "up": 5.9, "med": -5.79, "crash": None,
+                        "tier": "≥¥100", "base_up": 4.5, "base_n": 9248,
+                        "up_24h": 18.1, "med_24h": -0.38, "base_up_24h": 17.5, "n_24h": 929,
+                        "win_net_7d": 2.5, "win_net_24h": 3.9,
+                        "base_win_7d": 1.8, "base_win_24h": 3.6, "net_med_7d": -8.14},
     # ---- 建仓 + 求购价上移 ≥3%（「抬价收货」：庄家愿意多付,卖家还在让价）----
-    # 这是整套信号里唯一在低位有明显增量的子形态:T+24h 44.2% vs 基准 34.1%(+10.1pp),
-    # T+7 39.7% vs 31.6%(+8.1pp)；但中位仍为负(-1.30%),是「赢面变大」不是「稳赚」。
-    # 中位只有 +3.5pp、高位样本 n=50 且中位更差,都不足以支撑结论。
-    ("accum+lift", "低位"): {"n": 393, "up": 39.7, "med": -1.30, "crash": None,
-                             "tier": "≥¥100", "base_up": 31.6, "base_n": 57360,
-                             "up_24h": 44.2, "med_24h": -0.01, "base_up_24h": 34.1, "n_24h": 502},
+    # 整套信号里唯一在低位有明显增量的子形态：上涨率 +8.1pp、**扣费胜率 +6.6pp(20.1% vs 13.5%)**。
+    # 但中位净收益仍是 -3.69%，是「赢面变大」不是「正期望」。
+    ("accum+lift", "低位"): {"n": 393, "up": 39.7, "med": -1.22, "crash": None,
+                             "tier": "≥¥100", "base_up": 31.6, "base_n": 57264,
+                             "up_24h": 44.7, "med_24h": 0.00, "base_up_24h": 34.3, "n_24h": 512,
+                             "win_net_7d": 20.1, "win_net_24h": 28.3,
+                             "base_win_7d": 13.5, "base_win_24h": 9.6, "net_med_7d": -3.69},
     ("accum+lift", "中位"): {"n": 108, "up": 14.8, "med": -4.28, "crash": None,
-                             "tier": "≥¥100", "base_up": 11.3, "base_n": 27560,
-                             "up_24h": 24.6, "med_24h": -0.72, "base_up_24h": 22.8, "n_24h": 142},
-    ("accum+lift", "高位"): {"n": 50, "up": 12.0, "med": -7.50, "crash": None,
-                             "tier": "≥¥100", "base_up": 4.4, "base_n": 9508,
-                             "up_24h": 16.4, "med_24h": -0.96, "base_up_24h": 17.6, "n_24h": 61},
-    # ---- 启动：追涨指纹，实测为负（现价 ≥¥10；样本薄，仅作方向参考）----
-    ("launch", "*"): {"n": 19, "up": 21.1, "med": -9.02, "crash": None,
-                      "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
-    # ---- 派发：唯一在可交易品上依然强有效的方向信号（现价 ≥¥10）----
-    # 口径已按 V0.3.30 单边条件(求购不增)重算：24h n=131 上涨 11.5% / 中位 -3.31%;
-    # T+7 n=59 上涨 6.8% / 中位 -11.90%;基准 24h 上涨 29.5% / T+7 上涨 24.5% / 中位 -3.12%。
-    # 派发是短周期事件,24h 的信息量比 7 日更直接(7 日后价格已经开始新的平衡),所以两个周期都给。
-    ("distribute", "*"): {"n": 59, "up": 6.8, "med": -11.90, "crash": None,
-                          "tier": "≥¥10", "base_up": 24.5, "base_n": 131337,
-                          "up_24h": 11.5, "med_24h": -3.31, "base_up_24h": 29.5,
-                          "n_24h": 131},
+                             "tier": "≥¥100", "base_up": 11.3, "base_n": 27768,
+                             "up_24h": 24.6, "med_24h": -0.72, "base_up_24h": 22.9, "n_24h": 142,
+                             "win_net_7d": 9.3, "win_net_24h": 12.7,
+                             "base_win_7d": 2.7, "base_win_24h": 3.1, "net_med_7d": -6.67},
+    ("accum+lift", "高位"): {"n": 50, "up": 12.0, "med": -7.55, "crash": None,
+                             "tier": "≥¥100", "base_up": 4.5, "base_n": 9248,
+                             "up_24h": 16.4, "med_24h": -0.96, "base_up_24h": 17.5, "n_24h": 61,
+                             "win_net_7d": 4.0, "win_net_24h": 4.9,
+                             "base_win_7d": 1.8, "base_win_24h": 3.6, "net_med_7d": -9.86},
+    # ---- 启动：追涨指纹。24 小时有效、7 天衰减（这不是「负」而是「短命」）----
+    # T+24h 上涨 44.2% vs 基准 29.3%、扣费胜率 31.9% vs 7.0%（全部信号里最高的 24h 胜率）；
+    # T+7 掉到 上涨 24.8%、扣费胜率 9.5%（基准 9.2%）—— 7 天持有等于把优势耗光。
+    ("launch", "*"): {"n": 105, "up": 24.8, "med": -3.18, "crash": None,
+                      "tier": "≥¥100", "base_up": 23.0, "base_n": 94280,
+                      "up_24h": 44.2, "med_24h": -0.01, "base_up_24h": 29.3, "n_24h": 138,
+                      "win_net_7d": 9.5, "win_net_24h": 31.9,
+                      "base_win_7d": 9.2, "base_win_24h": 7.0, "net_med_7d": -5.60},
+    # ---- 派发：唯一在可交易品上依然强有效的方向信号（现价 ≥¥100）----
+    # T+24h 上涨 13.2% vs 基准 29.3%；T+7 上涨 3.2%、**扣费胜率 0.0%**（n=31，31 个样本里没有一个扣费后为正）。
+    ("distribute", "*"): {"n": 31, "up": 3.2, "med": -10.90, "crash": None,
+                          "tier": "≥¥100", "base_up": 23.0, "base_n": 94280,
+                          "up_24h": 13.2, "med_24h": -3.33, "base_up_24h": 29.3, "n_24h": 38,
+                          "win_net_7d": 0.0, "win_net_24h": 13.2,
+                          "base_win_7d": 9.2, "base_win_24h": 7.0, "net_med_7d": -13.12},
 }
 
 # 位置档（用于标题与措辞）
 POS_LOW_MAX = 30.0      # ≤30% 分位 = 低位
 POS_HIGH_MIN = 70.0     # ≥70% 分位 = 高位
+
+# 卖出费率决定盈亏平衡点：按最低售价买入、再按最低售价挂出，涨 0% 是亏的。
+# BUFF 卖出手续费 2.5% ⇒ 必须涨到 1/(1-0.025)-1 = +2.56% 才刚好回本。
+SELL_FEE_PCT = 2.5
+BREAKEVEN_PCT = (1.0 / (1.0 - SELL_FEE_PCT / 100.0) - 1.0) * 100.0
 
 
 # ---------------------------------------------------------------- 状态计算
@@ -290,34 +316,56 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
     up = float(st["up"])
     med = float(st["med"])
     base_up = st.get("base_up")
-    _parts = []
-    if st.get("up_24h") is not None:
-        _parts.append(f"T+24h 上涨 {float(st['up_24h']):.1f}%、中位 {float(st['med_24h']):+.2f}%")
-    _parts.append(f"T+7 上涨 {up:.1f}%、中位 {med:+.2f}%")
-    head = f"　{scope_txt}（现价 {tier}）{n:,} 例，" + "；".join(_parts)
-    crash = st.get("crash")
-    if crash:
-        head += f"；跌超15% 占 {float(crash):.1f}%"
-    lines = [head]
+    lines = [f"　{scope_txt}（现价 {tier}）{n:,} 例"]
 
+    # ---- 扣费胜率：真正能落袋的概率，带同位置基准做参照 ----
+    w7, w24 = st.get("win_net_7d"), st.get("win_net_24h")
+    bw7, bw24 = st.get("base_win_7d"), st.get("base_win_24h")
+    if w7 is not None:
+        _w = []
+        if w24 is not None:
+            _w.append(f"T+24h {float(w24):.1f}%")
+        _w.append(f"T+7 {float(w7):.1f}%")
+        _base = ""
+        if bw7 is not None:
+            _where = "同位置基准" if by_position else "全市场基准"
+            if bw24 is not None:
+                _base = f"（{_where} {float(bw24):.1f}% / {float(bw7):.1f}%）"
+            else:
+                _base = f"（{_where} {float(bw7):.1f}%）"
+        lines.append(f"　扣费后赚钱概率 " + "、".join(_w) + _base)
+
+    # ---- 上涨率 / 典型涨跌：不用「中位」这种统计黑话，直接说典型情况 ----
+    net_med = st.get("net_med_7d")
+    tail = f"（扣费后 {float(net_med):+.2f}%）" if net_med is not None else ""
+    lines.append(f"　T+7 上涨 {up:.1f}%、典型涨跌 {med:+.2f}%{tail}")
+
+    # ---- 结论：由「相对基准的增量」和「扣费后正负」共同决定，不写死 ----
     if base_up is not None:
         delta = up - float(base_up)
-        _where = "该位置任意时刻" if by_position else "基准（全体可交易品）"
-        _sep = " " if by_position else ""      # 中文里「该位置任意时刻 24h」需要空格
-        if st.get("base_up_24h") is not None:
-            lines.append(f"　对照：{_where}{_sep}24h 上涨 {float(st['base_up_24h']):.1f}%、"
-                         f"7 日上涨 {float(base_up):.1f}%")
-        else:
-            lines.append(f"　对照：{_where}上涨 {float(base_up):.1f}%")
-        if delta >= 3.0:
-            judge = f"本形态较基准高 {abs(delta):.1f}pp，有额外信息量"
+        # 24 小时优势远大于 7 日时（启动就是这样），必须点出来，
+        # 否则「7 日仅 +1.8pp」会被读成「这信号没用」，而它其实是个 24h 信号。
+        d24 = None
+        if st.get("up_24h") is not None and st.get("base_up_24h") is not None:
+            d24 = float(st["up_24h"]) - float(st["base_up_24h"])
+        if d24 is not None and d24 >= 5.0 and abs(delta) < 3.0:
+            # 7 日看不出增量、但 24h 有明显增量（启动就是这样）：
+            # 不点出这一句，「7 日仅 +1.8pp」会被读成「这信号没用」。
+            judge = (f"7 日上涨率较基准 {float(base_up):.1f}% 仅 {delta:+.1f}pp，"
+                     f"但 24h 高 {d24:.1f}pp")
+        elif delta >= 3.0:
+            judge = f"上涨率较基准 {float(base_up):.1f}% 高 {abs(delta):.1f}pp"
         elif delta <= -3.0:
-            judge = f"本形态较基准低 {abs(delta):.1f}pp，反而更差"
+            judge = f"上涨率较基准 {float(base_up):.1f}% 低 {abs(delta):.1f}pp"
         else:
-            judge = f"本形态较基准仅 {delta:+.1f}pp，无显著信息量"
-        lines.append(f"　结论：{judge}；中位 {med:+.2f}%，{'不构成买点' if med < 0 else '中位为正'}")
+            judge = f"上涨率较基准 {float(base_up):.1f}% 仅 {delta:+.1f}pp，无显著差异"
+        if w7 is not None and med < 0:
+            # 即使胜率更高，只要中位为负，就必须说清「不是正期望」，别让读者以为能稳赚。
+            lines.append(f"　结论：{judge}；涨不过 +{BREAKEVEN_PCT:.2f}% 就是亏，仍非正期望")
+        else:
+            lines.append(f"　结论：{judge}")
     if n < 100:
-        # 100 例以下不足以支撑「-17.7pp」这种量级的结论,必须自曝样本量。
+        # 100 例以下不足以支撑 pp 级的结论，必须自曝样本量。
         lines.append(f"　（样本仅 {n} 例，统计稳定性有限，仅作方向参考）")
     return lines
 
@@ -335,15 +383,12 @@ def footer(phase: str, position: str) -> str:
     """
     if phase.startswith("accum"):
         if position == "高位":
-            return "⚠️ 高位不建议介入；若已持有，注意及时止盈。"
-        if phase == "accum+lift" and position == "低位":
-            return ("⚠️ 赢面变大但不是稳赚：T+7 上涨率 39.7% vs 基准 31.6%，"
-                    "中位仍 -1.30%。可小仓跟踪，别当无风险。")
-        if position == "低位":
-            return "⚠️ 观察类信号。低位只是相对不那么差，中位涨幅仍为负，不构成买点。"
-        return "⚠️ 观察类信号；中位建仓历史弱于基准，不构成买点。"
+            return "⚠️ 高位不建议介入；持有者考虑止盈。"
+        # 低位/中位不另加尾注：上面的「结论」已经把话说完，再说一遍是啰嗦。
+        return ""
     if phase == "launch":
-        return "⚠️ 追涨形态样本偏薄且历史为负，不建议追入。"
+        # 启动是短周期信号:24h 扣费胜率 31.9%(基准 7.0%),7 天掉到 9.5%(基准 9.2%)。
+        return "⚠️ 只在 24 小时内有效，快进快出，别过夜持有。"
     if phase == "distribute":
-        return "⚠️ 持有者宜考虑减仓；未持有者暂缓介入。"
-    return "⚠️ 仅供观察，不构成买卖建议。"
+        return "⚠️ 持有者考虑减仓；未持有者暂缓介入。"
+    return ""
