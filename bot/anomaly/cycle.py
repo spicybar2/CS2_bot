@@ -137,10 +137,32 @@ def _fmt_price_line(chg: Optional[float]) -> str:
     return f"　最低售价　{word}（{chg:+.1f}%）"
 
 
+def _fmt_buy_price_line(cur_price: Any, chg: Optional[float]) -> str:
+    """最高求购价行。
+
+    CS 市场里「庄家收货」首先表现为**抬价/串价**——把最高求购价往上挪一格去卡卖家,
+    而不是原地堆求购量:求购单不锁资金,原地堆单可以零成本造假。
+    只有求购量涨、求购价不动时,才更可能是散户跟风或假墙 —— 这一行是区分两者的关键证据。
+    """
+    try:
+        px = float(cur_price or 0)
+    except (TypeError, ValueError):
+        px = 0.0
+    if px <= 0:
+        return "　最高求购价　数据不足"
+    if chg is None:
+        return f"　最高求购价　¥{px:,.2f}"
+    if abs(chg) < 0.05:
+        return f"　最高求购价　¥{px:,.2f}　持平（0.0%）"
+    word = "上移" if chg > 0 else "下移"      # CS 玩家说「串价上移 / 下移」
+    return f"　最高求购价　¥{px:,.2f}　{word}（{chg:+.1f}%）"
+
+
 def _build_reading(phase: str, position: str, pos_pct: Optional[float],
                    buy_chg: Optional[float], sell_chg: Optional[float],
                    price_chg: Optional[float], sell_now: int, buy_now: int,
-                   window_points: int, price: Any) -> List[str]:
+                   window_points: int, price: Any,
+                   window_days: int = 30) -> List[str]:
     """拼装「判读 + 历史参照」两段。
 
     每句都由当时状态生成(位置分档 / 求购强度 / 价格方向 / 供给方向 / 采样点数),
@@ -154,7 +176,8 @@ def _build_reading(phase: str, position: str, pos_pct: Optional[float],
         price_f = 0.0
     out = ["▍判读"]
     out.extend(f"　{x}" for x in phase_rules.reading(
-        phase, position, pos_pct, buy_chg, sell_chg, price_chg, ratio, window_points))
+        phase, position, pos_pct, buy_chg, sell_chg, price_chg, ratio, window_points,
+        window_days=window_days))
     out.append(phase_rules.stat_as_of_line())
     out.extend(phase_rules.stat_lines(phase, position, price_f))
     return out
@@ -224,6 +247,7 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
         f"▍盘口变动（近 {window_label}）",
         _fmt_qty_line("求购量", buy_60, buy_now, buy_chg60),
         _fmt_qty_line("在售量", sell_60, sell_now, sell_chg60),
+        _fmt_buy_price_line(snap.buy_price, bp_chg60),
         _fmt_price_line(price_chg_60),
     ]
     # 分平台明细只作补充:总量行已经给出方向,这一层是给要核对 BUFF/悠悠 差异的人看。
@@ -261,7 +285,14 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
     else:
         high_ok = pos30 is not None and pos30 >= cfg.distrib_pos_high
         high_txt = f"价格处近30日高位(较30天前 {pos30:+.0f}%,区间数据缺失回退口径)" if pos30 is not None else ""
-    stall = buy_chg60 is None or abs(buy_chg60) < cfg.distrib_buy_stall
+    # V0.3.30:改为**单边**条件。CS 市场出货时庄家会先撤掉自己的求购单(求购量骤降),
+    # 再往上挂卖;旧写法 abs(chg)<2 把「撤单派发」判成「不是停滞」,直接漏掉这类派发。
+    # 实测(现价 ≥¥10、在售 +6% 且高位,T+7,见 tools/probe_distribute_buy.py):
+    #   停滞组(±2%) 上涨 6.8% / 中位 -11.38%(n=44)
+    #   撤单组(≤-2%) 上涨 6.7% / 中位 -13.28%(n=15)  ← 一样负,却被旧条件排除
+    #   上升组(≥+2%) 上涨 19.2% / 中位 -9.94%(n=26)  ← 明显更好,应继续排除
+    # 于是边界落在单边:求购不增(< +2%)即算派发;信号量 +39%,涨跌分布几乎不变。
+    stall = buy_chg60 is None or buy_chg60 < cfg.distrib_buy_stall
     sell_abs_req = _abs_req(cfg, sell_60, cfg.distrib_sell_pct)
     if (high_ok
             and sell_chg60 is not None and sell_chg60 >= cfg.distrib_sell_pct
@@ -276,12 +307,16 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
                 # V0.3.13:同上,窗口名与百分比已在盘口块里,这里只留绝对增量+分平台
                 f"在售暴增 +{sell_now - sell_60}单"
                 + (f"({book_split_inline(base_book, cur_book, 'sell')})" if _split_sell else ""),
-                "求购停滞" if stall else "",
+                # 求购方向分三种说:停滞 / 撤单(庄家先撤买单再挂卖)/ 数据缺失
+                ("求购数据缺失" if buy_chg60 is None
+                 else (f"求购撤单 {buy_chg60:+.1f}%"
+                       if buy_chg60 <= -float(cfg.distrib_buy_stall) else "求购停滞")),
             ],
             lines=book_lines, position=position, pos_pct=pos_pct,
             reading=_build_reading("distribute", position, pos_pct, buy_chg60,
                                    sell_chg60, price_chg_60, sell_now, buy_now,
-                                   window_points, snap.price))
+                                   window_points, snap.price,
+                                   int(getattr(cfg, "distrib_range_days", 30))))
 
     # ---- ② 启动确认(求购价上移 + 价格跟涨) ----
     # V0.3.0 补四道锁(实测:启动是唯一「T+24h 起超额就为负、逐窗单调恶化」的阶段,
@@ -324,7 +359,8 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
             lines=book_lines, position=position, pos_pct=pos_pct,
             reading=_build_reading("launch", position, pos_pct, buy_chg60,
                                    sell_chg60, price_chg_60, sell_now, buy_now,
-                                   window_points, snap.price))
+                                   window_points, snap.price,
+                                   int(getattr(cfg, "distrib_range_days", 30))))
 
     # ---- ① 建仓监测(吸筹期:价格横盘是前提;V0.3.0 连续式绝对量 + 横盘金额豁免) ----
     abs_req = _abs_req(cfg, buy_60, cfg.accum_buy_pct_min)
@@ -367,7 +403,8 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
             lines=accum_lines, position=position, pos_pct=pos_pct,
             reading=_build_reading("accum", position, pos_pct, buy_chg60,
                                    sell_chg60, price_chg_60, sell_now, buy_now,
-                                   window_points, snap.price))
+                                   window_points, snap.price,
+                                   int(getattr(cfg, "distrib_range_days", 30))))
 
     return None
 

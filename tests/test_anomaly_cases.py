@@ -69,12 +69,21 @@ case("1 突然拉升(价涨+求购增+在售减)",
      hist(ramp(1000, 1058), ramp(100, 72), ramp(50, 78)),
      expect_type="surge", expect_dir="UP", expect_level_min="L2")
 
-# Case 2 价格↑ + 求购↓ + 在售↑ -> 上涨但供需背离 divergence
-case("2 上涨供需背离(价涨+求购减+在售增)",
+# Case 2 价格↑ + 求购↓ + 在售↑(中位) -> 上涨但供需背离 divergence
+# V0.3.30:派发改成「求购不增」单边口径后,同样的形态在**高位**会归到 distribute(见 2b),
+# 这里把 price_30 放到接近现价(位置≈中位),专门守住 divergence 这一支。
+case("2 上涨供需背离(价涨+求购减+在售增,中位)",
+     snap(price=1070, sell_price=1070, buy_price=1000, sell_num=135, buy_num=33,
+          rate_7=6.0, rate_30=9.0, price_7=1000, price_30=1060),
+     hist(ramp(1000, 1068), ramp(100, 132), ramp(50, 35)),
+     expect_type="divergence")
+
+# Case 2b 同一形态但在高位 -> 拉高 + 供货涌入 + 撤买单 = 派发(CS 市场标准出货)
+case("2b 高位拉高出货(价涨+求购撤+在售增)",
      snap(price=1070, sell_price=1070, buy_price=1000, sell_num=135, buy_num=33,
           rate_7=6.0, rate_30=9.0, price_7=1000, price_30=980),
      hist(ramp(1000, 1068), ramp(100, 132), ramp(50, 35)),
-     expect_type="divergence")
+     expect_type="distribute")
 
 # Case 3 价格↓ + 求购↓ + 在售↑ -> 突然跳水 dump
 case("3 突然跳水(价跌+求购减+在售增)",

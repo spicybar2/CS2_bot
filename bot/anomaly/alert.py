@@ -236,7 +236,8 @@ def _format_phase_alert(r: Dict[str, Any], market: Optional[str] = None,
             lines.append(f"在售量　{'  '.join(segs)}　合计 {total:,}")
     lines.append('━━━━━━━━━━━━━━')
     if pos:
-        lines.append(f"近 30 日位置　{pos}")
+        # 区间天数与分位已在「判读」第一句给全,这里只留档位,避免天数写死与配置不一致。
+        lines.append(f"位置　{pos}")
     if market:
         lines.append(market)
     lines.append(phase_rules.footer(ptype, pos or '中位'))

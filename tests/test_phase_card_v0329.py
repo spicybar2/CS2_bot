@@ -111,10 +111,12 @@ def test_same_signal_three_positions():
 
     low, mid, high = readings.get("低位", ""), readings.get("中位", ""), readings.get("高位", "")
     check("三种位置的判读互不相同", len({low, mid, high}) == 3)
-    check("低位结论说「吸筹」", "接近真实吸筹" in low and "诱多" not in low)
-    check("高位结论说「诱多」", "诱多" in high and "接近真实吸筹" not in high)
+    # 判读句必须与「历史参照」用同一个数字:低位建仓增量 -0.3pp,不能说成「值得跟踪」
+    check("低位判读按数据说话(无增量)",
+          "没有增量" in low and "诱多" not in low, low)
+    check("高位结论说「诱多」", "诱多" in high and "没有增量" not in high, high)
     check("中位结论说「难以区分」", "难以区分" in mid)
-    check("低位尾注:等企稳", "企稳" in card_of(
+    check("低位尾注不再承诺「等企稳介入」", "不构成买点" in card_of(
         detect_phase(snap(), HIST, BASE, CFG, price_chg_60=0.0, range_30d=(60.0, 200.0))))
     check("高位尾注:不建议介入", "不建议介入" in card_of(
         detect_phase(snap(), HIST, BASE, CFG, price_chg_60=0.0, range_30d=(60.0, 110.0))))
@@ -175,6 +177,40 @@ def test_thin_sampling():
     check("采样充足时不提示", not any("采样点" in x for x in lines_ok))
 
 
+# ---------------------------------------------------------------- [7] 派发:求购撤单也算
+def test_distribute_buy_withdraw():
+    print("\n[7] 派发「求购不增」单边口径(CS 市场:庄家先撤买单再出货)")
+    def dist_hist(buy_seq, sell_seq):
+        return make_history(buy_seq, sell_seq, [100.0] * len(buy_seq), [95.0] * len(buy_seq))
+
+    # 在售 +6.7%、价格贴区间最高、求购 -20%(撤单) —— 旧 abs() 口径会判「不是停滞」而漏掉
+    h_wd = dist_hist([1000 - i * 16 for i in range(13)], [3000 + i * 16 for i in range(13)])
+    sig_wd = detect_phase(snap(buy=808, sell=3192), h_wd, BASE, CFG,
+                          price_chg_60=0.0, range_30d=(60.0, 100.0))
+    check("求购 -20% 仍判派发", sig_wd is not None and sig_wd.phase == "distribute",
+          sig_wd.phase if sig_wd else None)
+    if sig_wd:
+        check("原因文案写明「撤单」", any("撤单" in r for r in sig_wd.reasons), str(sig_wd.reasons))
+
+    # 求购 +9%(上升)—— 实测该组明显更好,必须继续排除
+    h_up = dist_hist([1000 + i * 7 for i in range(13)], [3000 + i * 16 for i in range(13)])
+    sig_up = detect_phase(snap(buy=1084, sell=3192), h_up, BASE, CFG,
+                          price_chg_60=0.0, range_30d=(60.0, 100.0))
+    check("求购 +8% 不算派发", not (sig_up is not None and sig_up.phase == "distribute"),
+          sig_up.phase if sig_up else None)
+
+
+# ---------------------------------------------------------------- [8] 统计口径不伪造粒度
+def test_stat_scope_label():
+    print("\n[8] 启动/派发统计不按位置伪造粒度")
+    lines = phase_rules.stat_lines("distribute", "高位", 500.0)
+    joined = "\n".join(lines)
+    check("派发给合计口径", "不分位置合计" in joined, joined)
+    check("派发不再假装有分位置样本", "高位形态" not in joined, joined)
+    lines_a = phase_rules.stat_lines("accum", "高位", 500.0)
+    check("建仓仍按位置给", "高位形态" in "\n".join(lines_a), "\n".join(lines_a))
+
+
 def main():
     test_buckets()
     test_same_signal_three_positions()
@@ -182,6 +218,8 @@ def main():
     test_stat_scope()
     test_other_phases()
     test_thin_sampling()
+    test_distribute_buy_withdraw()
+    test_stat_scope_label()
     print(f"\n通过 {PASS} 项, 失败 {FAIL} 项")
     return 1 if FAIL else 0
 

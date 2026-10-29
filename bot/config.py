@@ -341,7 +341,7 @@ class AnomalyConfig:
     distrib_range_pct: float = 90.0    # 派发:现价 ≥ 近 distrib_range_days 日最高价 × 此比例 = 真·高位
     distrib_range_days: int = 30       # 派发:区间回看天数
     distrib_pos_high: float = 8.0      # 派发:区间数据缺失时的旧口径回退(pos_30 ≥8% = 30 日涨幅)
-    distrib_buy_stall: float = 2.0     # 派发:求购 |chg| <2% = 停滞
+    distrib_buy_stall: float = 2.0     # 派发:求购变化 < 此值(单边,含负值=撤单) 即算「求购不增」
     fake_wall_price_dn: float = -2.0   # 假买墙:求购增但价格跌超此值
     fake_wall_sell_up: float = 10.0    # 假买墙:且在售暴增超此值 → 挂单诱多,不触发
     digest_sell_pct: float = 3.0       # 消化:在售净减 ≥3%(/分析 标签)

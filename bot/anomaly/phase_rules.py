@@ -41,6 +41,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 # price_tier：统计所限定的现价档位，低于该价位的品不适用。
 STATS_AS_OF = "2026-10-29"
 
+# 键 = (阶段, 位置)；位置为 "*" 表示「不分位置」的合计样本。
+# 启动/派发没有按位置拆的样本量(启动 n≈19、派发 n≈59),硬凑三档等于伪造粒度,
+# 所以只给合计,并在文案里注明「不限位置」。
 STATS: Dict[Tuple[str, str], Dict[str, object]] = {
     # ---- 建仓：按位置分档（现价 ≥¥100）----
     ("accum", "低位"): {"n": 1757, "up": 30.9, "med": -1.82, "crash": 0.2,
@@ -49,27 +52,22 @@ STATS: Dict[Tuple[str, str], Dict[str, object]] = {
                         "tier": "≥¥100", "base_up": 9.6, "base_n": 16943},
     ("accum", "高位"): {"n": 153, "up": 3.9, "med": -6.57, "crash": 8.5,
                         "tier": "≥¥100", "base_up": 3.3, "base_n": 4736},
-    # ---- 启动：追涨指纹，实测为负（现价 ≥¥10；样本偏薄，仅作参考）----
-    ("launch", "低位"): {"n": 19, "up": 21.1, "med": -9.02, "crash": None,
-                         "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
-    ("launch", "中位"): {"n": 19, "up": 21.1, "med": -9.02, "crash": None,
-                         "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
-    ("launch", "高位"): {"n": 19, "up": 21.1, "med": -9.02, "crash": None,
-                         "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
+    # ---- 启动：追涨指纹，实测为负（现价 ≥¥10；样本薄，仅作方向参考）----
+    ("launch", "*"): {"n": 19, "up": 21.1, "med": -9.02, "crash": None,
+                      "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
     # ---- 派发：唯一在可交易品上依然强有效的方向信号（现价 ≥¥10）----
-    ("distribute", "低位"): {"n": 35, "up": 2.9, "med": -13.55, "crash": None,
-                             "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
-    ("distribute", "中位"): {"n": 35, "up": 2.9, "med": -13.55, "crash": None,
-                             "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
-    ("distribute", "高位"): {"n": 35, "up": 2.9, "med": -13.55, "crash": None,
-                             "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
+    # 口径已按 V0.3.30 单边条件(求购不增)重算：24h n=131 上涨 11.5% / 中位 -3.31%;
+    # T+7 n=59 上涨 6.8% / 中位 -11.90%;基准 24h 上涨 29.5% / T+7 上涨 24.5% / 中位 -3.12%。
+    # 派发是短周期事件,24h 的信息量比 7 日更直接(7 日后价格已经开始新的平衡),所以两个周期都给。
+    ("distribute", "*"): {"n": 59, "up": 6.8, "med": -11.90, "crash": None,
+                          "tier": "≥¥10", "base_up": 24.5, "base_n": 131337,
+                          "up_24h": 11.5, "med_24h": -3.31, "base_up_24h": 29.5,
+                          "n_24h": 131},
 }
 
-# 分档阈值（与回测脚本保持完全一致，改这里必须同步重跑回测）
+# 位置档（用于标题与措辞）
 POS_LOW_MAX = 30.0      # ≤30% 分位 = 低位
 POS_HIGH_MIN = 70.0     # ≥70% 分位 = 高位
-
-_POS_ORDER = ("低位", "中位", "高位")
 
 
 # ---------------------------------------------------------------- 状态计算
@@ -157,10 +155,11 @@ def headline(phase: str, position: str) -> Tuple[str, str]:
 
 
 # ---------------------------------------------------------------- 判读文案
-def _pos_sentence(pct: Optional[float], position: str) -> str:
+def _pos_sentence(pct: Optional[float], position: str, window_days: int = 30) -> str:
     if pct is None:
-        return f"近 30 日区间数据不足，位置按{position}处理（低位 ≤30%、高位 ≥70%）。"
-    return (f"现价位于近 30 日区间 {pct:.0f}% 分位"
+        return (f"近 {window_days} 日区间数据不足，位置按{position}处理"
+                f"（低位 ≤{POS_LOW_MAX:.0f}%、高位 ≥{POS_HIGH_MIN:.0f}%）。")
+    return (f"现价位于近 {window_days} 日区间 {pct:.0f}% 分位"
             f"（低位 ≤{POS_LOW_MAX:.0f}%、高位 ≥{POS_HIGH_MIN:.0f}%），属{position}。")
 
 
@@ -181,34 +180,52 @@ def _supply_sentence(sell_chg: Optional[float], ratio: Optional[float]) -> str:
 def reading(phase: str, position: str, pct: Optional[float],
             buy_chg: Optional[float], sell_chg: Optional[float],
             price_chg: Optional[float], ratio: Optional[float],
-            samples: Optional[int] = None) -> List[str]:
+            samples: Optional[int] = None, window_days: int = 30) -> List[str]:
     """生成「判读」三段：位置 + 盘口性质 + 该位置的判断。全部由状态决定。"""
-    lines = [_pos_sentence(pct, position)]
+    lines = [_pos_sentence(pct, position, window_days)]
     strength = buy_strength(buy_chg)
     pt = price_trend(price_chg)
 
     if phase == "accum":
-        if pt == "横盘":
-            move = "求购持续累积、价格未抬升"
-        elif pt == "微跌":
-            move = "求购累积而价格小幅下跌"
-        else:
-            move = "求购累积且价格小幅抬升"
+        # 价格方向必须四个分支都写全:"未知"不能落到"小幅抬升"那一档(旧写法会默认抬升)。
+        move = {"横盘": "求购持续累积、价格未抬升",
+                "微跌": "求购累积而价格小幅下跌",
+                "微涨": "求购累积且价格小幅抬升",
+                "未知": "求购持续累积（价格数据缺失）"}.get(pt, "求购持续累积")
+        # 判读句必须和「历史参照」用同一个数字，否则会出现
+        # 判读说「值得跟踪」、下一段结论说「无显著信息量」的自相矛盾。
+        st, _scope, _by_pos = _stat_for("accum", position)
+        edge = None
+        if st and st.get("base_up") is not None:
+            edge = float(st["up"]) - float(st["base_up"])
         if position == "低位":
-            judge = "低位出现该形态，接近真实吸筹，是三个位置里唯一值得跟踪的。"
+            if edge is None:
+                judge = "低位出现该形态：下方有区间支撑，但样本不足，只作观察记录。"
+            elif edge >= 3.0:
+                judge = f"低位出现该形态：较该位置基准多 {edge:+.1f}pp，可作跟踪目标。"
+            else:
+                judge = ("低位出现该形态：与该位置本身相比没有增量，"
+                         "只能说明价格在低位，不能说明有资金进场。")
         elif position == "高位":
-            judge = "高位出现该形态多为出货前的诱多，性质与低位吸筹相反。"
+            judge = "高位出现该形态多为出货前的诱多：求购堆积却不推价，是挂给跟风盘看的。"
         else:
-            judge = "中位下方无区间参照，吸筹与出货难以区分。"
+            judge = "中位下方没有区间参照，吸筹与出货难以区分。"
         lines.append(f"{move}（求购强度：{strength}），{_supply_sentence(sell_chg, ratio)}")
         lines.append(judge)
     elif phase == "launch":
-        lines.append(f"求购价上移、价格跟涨，属追涨形态（求购{strength}）。"
+        lines.append(f"求购价上移、价格跟涨，属追涨形态（求购强度：{strength}）。"
                      + _supply_sentence(sell_chg, ratio))
-        lines.append("该形态在可交易品上历史为负超额，不宜追入。")
+        lines.append("该形态在可交易品上历史为负，且样本偏薄，不宜追入。")
     elif phase == "distribute":
-        lines.append("价格处区间高位，在售快速增加，求购停滞。" + _supply_sentence(sell_chg, ratio))
-        lines.append("属出货期指纹，是负面信号。")
+        # 不在这里再写一遍「在售增加」——_supply_sentence 已经说过,重复会读成两件事。
+        ratio_txt = f"（在售/求购 = {ratio:.1f}）" if (ratio and ratio > 0) else ""
+        # 求购侧分两种说法:撤单(庄家先撤买单)是最典型的 CS 出货前动作,值得单独点出来。
+        if buy_chg is not None and buy_chg <= -2.0:
+            buy_txt = f"求购撤单 {buy_chg:+.1f}%"
+        else:
+            buy_txt = "求购未增"
+        lines.append(f"价格处区间高位，在售快速增加，{buy_txt}{ratio_txt}。")
+        lines.append("属出货期指纹：高位放货而需求端没有承接，是负面信号。")
     else:
         lines.append(_supply_sentence(sell_chg, ratio))
 
@@ -218,9 +235,22 @@ def reading(phase: str, position: str, pct: Optional[float],
 
 
 # ---------------------------------------------------------------- 统计参照
-def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
-    """「历史参照」：查表 + 与同位置基准对照 + 由数据推出的结论。"""
+def _stat_for(phase: str, position: str) -> Tuple[Optional[Dict[str, object]], str, bool]:
+    """取统计条目：(条目, 口径说明, 是否按位置分档)。
+
+    启动/派发样本量本来就薄，按位置硬拆会得到三个互不相同却同样不可靠的数，
+    宁可统一给合计、并在文案里说明「不分位置」。
+    """
     st = STATS.get((phase, position))
+    if st:
+        return st, f"{position}形态", True
+    st = STATS.get((phase, "*"))
+    return (st, "不分位置合计", False) if st else (None, "", False)
+
+
+def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
+    """「历史参照」：查表 + 与基准对照 + 由数据推出的结论。"""
+    st, scope_txt, by_position = _stat_for(phase, position)
     if not st:
         return ["　该状态样本不足，不作统计引用。"]
     tier = str(st.get("tier") or "")
@@ -236,24 +266,35 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
     up = float(st["up"])
     med = float(st["med"])
     base_up = st.get("base_up")
-    head = f"　{position}形态（现价 {tier}）{n:,} 例，T+7：上涨 {up:.1f}%、中位 {med:+.2f}%"
+    _parts = []
+    if st.get("up_24h") is not None:
+        _parts.append(f"T+24h 上涨 {float(st['up_24h']):.1f}%、中位 {float(st['med_24h']):+.2f}%")
+    _parts.append(f"T+7 上涨 {up:.1f}%、中位 {med:+.2f}%")
+    head = f"　{scope_txt}（现价 {tier}）{n:,} 例，" + "；".join(_parts)
     crash = st.get("crash")
     if crash:
-        head += f"、跌超15% 占 {float(crash):.1f}%"
+        head += f"；跌超15% 占 {float(crash):.1f}%"
     lines = [head]
 
     if base_up is not None:
         delta = up - float(base_up)
-        lines.append(f"　对照：该位置任意时刻上涨 {float(base_up):.1f}%")
-        if delta >= 3.0:
-            judge = f"本形态较该位置基准高 {delta:+.1f}pp，有额外信息量"
-        elif delta <= -3.0:
-            judge = f"本形态较该位置基准低 {delta:+.1f}pp，反而更差"
+        if st.get("base_up_24h") is not None:
+            lines.append(f"　对照：基准（全体可交易品）24h 上涨 {float(st['base_up_24h']):.1f}%、"
+                         f"7 日上涨 {float(base_up):.1f}%")
+        elif by_position:
+            lines.append(f"　对照：该位置任意时刻上涨 {float(base_up):.1f}%")
         else:
-            judge = f"本形态较该位置基准仅 {delta:+.1f}pp，无显著信息量"
+            lines.append(f"　对照：基准（全体可交易品）上涨 {float(base_up):.1f}%")
+        if delta >= 3.0:
+            judge = f"本形态较基准高 {abs(delta):.1f}pp，有额外信息量"
+        elif delta <= -3.0:
+            judge = f"本形态较基准低 {abs(delta):.1f}pp，反而更差"
+        else:
+            judge = f"本形态较基准仅 {delta:+.1f}pp，无显著信息量"
         lines.append(f"　结论：{judge}；中位 {med:+.2f}%，{'不构成买点' if med < 0 else '中位为正'}")
-    if n < 50:
-        lines.append(f"　（样本仅 {n} 例，统计稳定性有限）")
+    if n < 100:
+        # 100 例以下不足以支撑「-17.7pp」这种量级的结论,必须自曝样本量。
+        lines.append(f"　（样本仅 {n} 例，统计稳定性有限，仅作方向参考）")
     return lines
 
 
@@ -263,22 +304,19 @@ def stat_as_of_line() -> str:
 
 # ---------------------------------------------------------------- 尾注
 def footer(phase: str, position: str) -> str:
-    """卡片最后一行的行动提示，由阶段与位置决定。"""
+    """卡片最后一行的行动提示，由阶段与位置决定。
+
+    注意别在这里写「等在售转为下降」这类动作 —— 实测在售方向对后续涨跌没有分辨力
+    （2,483 例建仓里 2,478 例在售变动在 ±3% 内），拿它当介入条件是给自己加戏。
+    """
     if phase == "accum":
         if position == "高位":
             return "⚠️ 高位不建议介入；若已持有，注意及时止盈。"
         if position == "低位":
-            return "⚠️ 观察类信号。真要介入，等价格企稳、在售转为下降后再看。"
-        return "⚠️ 观察类信号，非买入依据。"
+            return "⚠️ 观察类信号。低位只是相对不那么差，中位涨幅仍为负，不构成买点。"
+        return "⚠️ 观察类信号；中位建仓历史弱于基准，不构成买点。"
     if phase == "launch":
-        return "⚠️ 追涨形态历史为负超额，不建议追入。"
+        return "⚠️ 追涨形态样本偏薄且历史为负，不建议追入。"
     if phase == "distribute":
         return "⚠️ 持有者宜考虑减仓；未持有者暂缓介入。"
     return "⚠️ 仅供观察，不构成买卖建议。"
-
-
-def position_line(phase: str, position: str, pct: Optional[float]) -> str:
-    """「位置」一句话（写进卡片的位置段）。"""
-    if pct is None:
-        return f"近 30 日位置　{position}（区间数据不足）"
-    return f"近 30 日位置　{position}（{pct:.0f}% 分位）"
