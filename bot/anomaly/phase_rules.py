@@ -45,13 +45,30 @@ STATS_AS_OF = "2026-10-29"
 # 启动/派发没有按位置拆的样本量(启动 n≈19、派发 n≈59),硬凑三档等于伪造粒度,
 # 所以只给合计,并在文案里注明「不限位置」。
 STATS: Dict[Tuple[str, str], Dict[str, object]] = {
-    # ---- 建仓：按位置分档（现价 ≥¥100）----
-    ("accum", "低位"): {"n": 1757, "up": 30.9, "med": -1.82, "crash": 0.2,
-                        "tier": "≥¥100", "base_up": 31.2, "base_n": 37400},
-    ("accum", "中位"): {"n": 573, "up": 7.5, "med": -4.82, "crash": 1.4,
-                        "tier": "≥¥100", "base_up": 9.6, "base_n": 16943},
-    ("accum", "高位"): {"n": 153, "up": 3.9, "med": -6.57, "crash": 8.5,
-                        "tier": "≥¥100", "base_up": 3.3, "base_n": 4736},
+    # ---- 建仓：按位置分档（现价 ≥¥100，tools/probe_bid_lift.py 的 E 组）----
+    # 「进价未抬」= 求购量涨但最高求购价没动 —— 求购单不锁资金,这种堆积零成本,所以没有增量。
+    ("accum", "低位"): {"n": 4581, "up": 32.7, "med": -1.91, "crash": None,
+                        "tier": "≥¥100", "base_up": 31.6, "base_n": 57360,
+                        "up_24h": 36.2, "med_24h": -0.14, "base_up_24h": 34.1, "n_24h": 6402},
+    ("accum", "中位"): {"n": 2171, "up": 12.2, "med": -4.39, "crash": None,
+                        "tier": "≥¥100", "base_up": 11.3, "base_n": 27560,
+                        "up_24h": 21.7, "med_24h": -0.63, "base_up_24h": 22.8, "n_24h": 3214},
+    ("accum", "高位"): {"n": 840, "up": 6.0, "med": -5.78, "crash": None,
+                        "tier": "≥¥100", "base_up": 4.4, "base_n": 9508,
+                        "up_24h": 17.9, "med_24h": -0.39, "base_up_24h": 17.6, "n_24h": 942},
+    # ---- 建仓 + 求购价上移 ≥3%（「抬价收货」：庄家愿意多付,卖家还在让价）----
+    # 这是整套信号里唯一在低位有明显增量的子形态:T+24h 44.2% vs 基准 34.1%(+10.1pp),
+    # T+7 39.7% vs 31.6%(+8.1pp)；但中位仍为负(-1.30%),是「赢面变大」不是「稳赚」。
+    # 中位只有 +3.5pp、高位样本 n=50 且中位更差,都不足以支撑结论。
+    ("accum+lift", "低位"): {"n": 393, "up": 39.7, "med": -1.30, "crash": None,
+                             "tier": "≥¥100", "base_up": 31.6, "base_n": 57360,
+                             "up_24h": 44.2, "med_24h": -0.01, "base_up_24h": 34.1, "n_24h": 502},
+    ("accum+lift", "中位"): {"n": 108, "up": 14.8, "med": -4.28, "crash": None,
+                             "tier": "≥¥100", "base_up": 11.3, "base_n": 27560,
+                             "up_24h": 24.6, "med_24h": -0.72, "base_up_24h": 22.8, "n_24h": 142},
+    ("accum+lift", "高位"): {"n": 50, "up": 12.0, "med": -7.50, "crash": None,
+                             "tier": "≥¥100", "base_up": 4.4, "base_n": 9508,
+                             "up_24h": 16.4, "med_24h": -0.96, "base_up_24h": 17.6, "n_24h": 61},
     # ---- 启动：追涨指纹，实测为负（现价 ≥¥10；样本薄，仅作方向参考）----
     ("launch", "*"): {"n": 19, "up": 21.1, "med": -9.02, "crash": None,
                       "tier": "≥¥10", "base_up": 22.7, "base_n": 102060},
@@ -180,32 +197,39 @@ def _supply_sentence(sell_chg: Optional[float], ratio: Optional[float]) -> str:
 def reading(phase: str, position: str, pct: Optional[float],
             buy_chg: Optional[float], sell_chg: Optional[float],
             price_chg: Optional[float], ratio: Optional[float],
-            samples: Optional[int] = None, window_days: int = 30) -> List[str]:
+            samples: Optional[int] = None, window_days: int = 30,
+            bid_chg: Optional[float] = None) -> List[str]:
     """生成「判读」三段：位置 + 盘口性质 + 该位置的判断。全部由状态决定。"""
     lines = [_pos_sentence(pct, position, window_days)]
     strength = buy_strength(buy_chg)
     pt = price_trend(price_chg)
 
-    if phase == "accum":
+    if phase.startswith("accum"):
+        lift = phase == "accum+lift"
         # 价格方向必须四个分支都写全:"未知"不能落到"小幅抬升"那一档(旧写法会默认抬升)。
         move = {"横盘": "求购持续累积、价格未抬升",
                 "微跌": "求购累积而价格小幅下跌",
                 "微涨": "求购累积且价格小幅抬升",
                 "未知": "求购持续累积（价格数据缺失）"}.get(pt, "求购持续累积")
+        if lift and bid_chg is not None:
+            move += f"、最高求购价上移 {bid_chg:+.1f}%"
         # 判读句必须和「历史参照」用同一个数字，否则会出现
         # 判读说「值得跟踪」、下一段结论说「无显著信息量」的自相矛盾。
-        st, _scope, _by_pos = _stat_for("accum", position)
+        st, _scope, _by_pos = _stat_for(phase, position)
         edge = None
         if st and st.get("base_up") is not None:
             edge = float(st["up"]) - float(st["base_up"])
         if position == "低位":
-            if edge is None:
+            if lift:
+                judge = ("低位抬价收货：有人愿意多付钱卡卖家，而卖方还在让价 —— "
+                         "这是本指纹里最接近真实建仓的一种，也是唯一在低位有明显增量的子形态。")
+            elif edge is None:
                 judge = "低位出现该形态：下方有区间支撑，但样本不足，只作观察记录。"
             elif edge >= 3.0:
                 judge = f"低位出现该形态：较该位置基准多 {edge:+.1f}pp，可作跟踪目标。"
             else:
-                judge = ("低位出现该形态：与该位置本身相比没有增量，"
-                         "只能说明价格在低位，不能说明有资金进场。")
+                judge = ("低位出现该形态：求购量涨了但求购价没动，"
+                         "而求购单不锁资金、堆量零成本，所以这些增量不说明有资金进场。")
         elif position == "高位":
             judge = "高位出现该形态多为出货前的诱多：求购堆积却不推价，是挂给跟风盘看的。"
         else:
@@ -278,13 +302,13 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
 
     if base_up is not None:
         delta = up - float(base_up)
+        _where = "该位置任意时刻" if by_position else "基准（全体可交易品）"
+        _sep = " " if by_position else ""      # 中文里「该位置任意时刻 24h」需要空格
         if st.get("base_up_24h") is not None:
-            lines.append(f"　对照：基准（全体可交易品）24h 上涨 {float(st['base_up_24h']):.1f}%、"
+            lines.append(f"　对照：{_where}{_sep}24h 上涨 {float(st['base_up_24h']):.1f}%、"
                          f"7 日上涨 {float(base_up):.1f}%")
-        elif by_position:
-            lines.append(f"　对照：该位置任意时刻上涨 {float(base_up):.1f}%")
         else:
-            lines.append(f"　对照：基准（全体可交易品）上涨 {float(base_up):.1f}%")
+            lines.append(f"　对照：{_where}上涨 {float(base_up):.1f}%")
         if delta >= 3.0:
             judge = f"本形态较基准高 {abs(delta):.1f}pp，有额外信息量"
         elif delta <= -3.0:
@@ -309,9 +333,12 @@ def footer(phase: str, position: str) -> str:
     注意别在这里写「等在售转为下降」这类动作 —— 实测在售方向对后续涨跌没有分辨力
     （2,483 例建仓里 2,478 例在售变动在 ±3% 内），拿它当介入条件是给自己加戏。
     """
-    if phase == "accum":
+    if phase.startswith("accum"):
         if position == "高位":
             return "⚠️ 高位不建议介入；若已持有，注意及时止盈。"
+        if phase == "accum+lift" and position == "低位":
+            return ("⚠️ 赢面变大但不是稳赚：T+7 上涨率 39.7% vs 基准 31.6%，"
+                    "中位仍 -1.30%。可小仓跟踪，别当无风险。")
         if position == "低位":
             return "⚠️ 观察类信号。低位只是相对不那么差，中位涨幅仍为负，不构成买点。"
         return "⚠️ 观察类信号；中位建仓历史弱于基准，不构成买点。"

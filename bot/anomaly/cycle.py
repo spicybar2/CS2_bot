@@ -162,10 +162,11 @@ def _build_reading(phase: str, position: str, pos_pct: Optional[float],
                    buy_chg: Optional[float], sell_chg: Optional[float],
                    price_chg: Optional[float], sell_now: int, buy_now: int,
                    window_points: int, price: Any,
-                   window_days: int = 30) -> List[str]:
+                   window_days: int = 30,
+                   bid_chg: Optional[float] = None) -> List[str]:
     """拼装「判读 + 历史参照」两段。
 
-    每句都由当时状态生成(位置分档 / 求购强度 / 价格方向 / 供给方向 / 采样点数),
+    每句都由当时状态生成(位置分档 / 求购强度与求购价方向 / 价格方向 / 供给方向 / 采样点数),
     历史参照按 `(阶段, 位置)` 查 phase_rules.STATS 并与同位置基准对照 ——
     不出现与数据矛盾的固定结论。
     """
@@ -177,7 +178,7 @@ def _build_reading(phase: str, position: str, pos_pct: Optional[float],
     out = ["▍判读"]
     out.extend(f"　{x}" for x in phase_rules.reading(
         phase, position, pos_pct, buy_chg, sell_chg, price_chg, ratio, window_points,
-        window_days=window_days))
+        window_days=window_days, bid_chg=bid_chg))
     out.append(phase_rules.stat_as_of_line())
     out.extend(phase_rules.stat_lines(phase, position, price_f))
     return out
@@ -395,16 +396,22 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
         note = str(getattr(cfg, "phase_accum_note", "") or "")
         if note:
             accum_lines.append(f"　{note}")
+        # V0.3.31:「求购价是否上移」是 CS 市场里区分「真收货」和「零成本堆量」的唯一硬证据。
+        # 实测低位:抬价组 T+7 上涨 39.7%(n=393),未抬价组 32.7%(n=4581),基准 31.6%。
+        lift = (bp_chg60 is not None
+                and bp_chg60 >= float(getattr(cfg, "launch_buy_price_pct", 3.0) or 3.0))
+        _phase_key = "accum+lift" if lift else "accum"
         _icon, _title = phase_rules.headline("accum", position)
         return PhaseSignal(
             phase="accum", title=_title, icon=_icon,
             floor_score=cfg.phase_score_accum,
             reasons=accum_reasons,
             lines=accum_lines, position=position, pos_pct=pos_pct,
-            reading=_build_reading("accum", position, pos_pct, buy_chg60,
+            reading=_build_reading(_phase_key, position, pos_pct, buy_chg60,
                                    sell_chg60, price_chg_60, sell_now, buy_now,
                                    window_points, snap.price,
-                                   int(getattr(cfg, "distrib_range_days", 30))))
+                                   int(getattr(cfg, "distrib_range_days", 30)),
+                                   bid_chg=bp_chg60))
 
     return None
 

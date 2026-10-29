@@ -111,10 +111,10 @@ def test_same_signal_three_positions():
 
     low, mid, high = readings.get("低位", ""), readings.get("中位", ""), readings.get("高位", "")
     check("三种位置的判读互不相同", len({low, mid, high}) == 3)
-    # 判读句必须与「历史参照」用同一个数字:低位建仓增量 -0.3pp,不能说成「值得跟踪」
-    check("低位判读按数据说话(无增量)",
-          "没有增量" in low and "诱多" not in low, low)
-    check("高位结论说「诱多」", "诱多" in high and "没有增量" not in high, high)
+    # 判读句必须与「历史参照」用同一个数字:求购价没抬时增量 +1.1pp,不能说成「值得跟踪」
+    check("低位判读按数据说话(未抬价→不说明有资金进场)",
+          "不说明有资金进场" in low and "诱多" not in low, low)
+    check("高位结论说「诱多」", "诱多" in high and "不说明有资金进场" not in high, high)
     check("中位结论说「难以区分」", "难以区分" in mid)
     check("低位尾注不再承诺「等企稳介入」", "不构成买点" in card_of(
         detect_phase(snap(), HIST, BASE, CFG, price_chg_60=0.0, range_30d=(60.0, 200.0))))
@@ -211,6 +211,34 @@ def test_stat_scope_label():
     check("建仓仍按位置给", "高位形态" in "\n".join(lines_a), "\n".join(lines_a))
 
 
+# ---------------------------------------------------------------- [9] 抬价收货子形态
+def test_bid_lift():
+    print("\n[9] 「抬价收货」:求购价上移 vs 原地堆量,结论必须分开")
+    # 求购量 +14%、卖价横盘、在售不动;唯一区别是最高求购价 95 → 98(+3.2%)
+    bp_seq = [95.0 + i * 0.25 for i in range(13)]
+    h_lift = make_history(BUY_SEQ, flat(13, 3000), flat(13, 100.0), bp_seq)
+    sig = detect_phase(snap(buy=1140, buy_price=98.0), h_lift, BASE, CFG,
+                       price_chg_60=0.0, range_30d=(60.0, 200.0))
+    check("抬价版仍判建仓", sig is not None and sig.phase == "accum",
+          sig.phase if sig else None)
+    if sig:
+        txt = "\n".join(sig.reading)
+        check("判读点明「抬价收货」", "抬价收货" in txt, txt)
+        check("判读写明求购价上移幅度", "上移" in txt, txt)
+        check("统计用抬价组(39.7%/44.2%)", "39.7" in txt and "44.2" in txt, txt)
+        check("尾注不承诺稳赚", "不是稳赚" in phase_rules.footer("accum+lift", "低位"))
+        check("盘中行显示求购价上移", any("上移" in ln for ln in sig.lines),
+              str(sig.lines))
+
+    sig_flat = detect_phase(snap(buy=1140, buy_price=95.0), HIST, BASE, CFG,
+                            price_chg_60=0.0, range_30d=(60.0, 200.0))
+    if sig_flat:
+        txt2 = "\n".join(sig_flat.reading)
+        check("未抬价版不讲抬价", "抬价收货" not in txt2, txt2)
+        check("未抬价版统计用 32.7%", "32.7" in txt2, txt2)
+        check("两种版本结论不同", txt2 != "\n".join(sig.reading) if sig else False)
+
+
 def main():
     test_buckets()
     test_same_signal_three_positions()
@@ -220,6 +248,7 @@ def main():
     test_thin_sampling()
     test_distribute_buy_withdraw()
     test_stat_scope_label()
+    test_bid_lift()
     print(f"\n通过 {PASS} 项, 失败 {FAIL} 项")
     return 1 if FAIL else 0
 
