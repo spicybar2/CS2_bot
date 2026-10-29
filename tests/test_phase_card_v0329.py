@@ -135,7 +135,7 @@ def test_card_hygiene():
     check("无 n=34 这类小样本自曝", "n=" not in card)
     check("无 pp 缩写堆砌", card.count("pp") <= 2)
     check("统计段带「统计截至」", "统计截至" in card)
-    check("统计段给出样本量与涨跌", "例" in card and "中位" in card)
+    check("统计段给出样本量与涨跌", "个品" in card and "典型涨跌" in card)
     check("统计段带同位置基准对照", "基准" in card)
     check("仍无成交量类词", not any(w in card for w in ("成交量", "放量", "缩量", "天量")))
     check("保留免责句", "不构成买卖建议" in card)
@@ -152,7 +152,8 @@ def test_stat_scope():
         check("提示不在统计范围内", "不在统计范围内" in txt, txt)
         check("说明统计档位", "≥¥100" in txt, txt)
     lines = phase_rules.stat_lines("accum", "低位", 5000.0)
-    check("高价品给出统计", any("例" in x for x in lines) and not any("不在统计" in x for x in lines))
+    check("高价品给出统计", any("次（" in x or "例" in x for x in lines)
+          and not any("不在统计" in x for x in lines))
     lines_unknown = phase_rules.stat_lines("accum", "低位", None)
     check("价格未知时不误报档位", not any("不在统计" in x for x in lines_unknown))
 
@@ -164,7 +165,8 @@ def test_other_phases():
         icon, title = phase_rules.headline(phase, "高位")
         check(f"{phase} 标题非空", bool(title) and bool(icon))
         lines = phase_rules.stat_lines(phase, "高位", 500.0)
-        check(f"{phase} 统计段有内容", bool(lines) and any("例" in x for x in lines), str(lines))
+        check(f"{phase} 统计段有内容",
+              bool(lines) and any("次（" in x or "例" in x for x in lines), str(lines))
         foot = phase_rules.footer(phase, "高位")
         check(f"{phase} 尾注非空", bool(foot.strip()))
 
@@ -229,7 +231,8 @@ def test_bid_lift():
         check("判读写明求购价上移幅度", "上移" in txt, txt)
         check("统计用抬价组(上涨39.7%/扣费胜率20.1%)",
               "39.7" in txt and "20.1" in txt, txt)
-        check("统计带扣费后赚钱概率", "扣费后赚钱概率" in txt and "2.56" in txt, txt)
+        check("统计带扣去手续费后赚钱概率", "扣去手续费后赚钱概率" in txt and "2.56" in txt, txt)
+        check("不印 T+24h（建仓按 7 天持有看）", "T+24h" not in txt, txt)
         check("不用「中位」这种统计黑话", "中位" not in txt, txt)
         check("低位不再堆重复尾注", phase_rules.footer("accum+lift", "低位") == "")
         check("盘中行显示求购价上移", any("上移" in ln for ln in sig.lines),

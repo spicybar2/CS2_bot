@@ -175,7 +175,7 @@ def _build_reading(phase: str, position: str, pos_pct: Optional[float],
         price_f = float(price or 0)
     except (TypeError, ValueError):
         price_f = 0.0
-    out = ["▍判读"]
+    out = ["▍饰品解析"]
     out.extend(f"　{x}" for x in phase_rules.reading(
         phase, position, pos_pct, buy_chg, sell_chg, price_chg, ratio, window_points,
         window_days=window_days, bid_chg=bid_chg))

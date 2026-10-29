@@ -53,17 +53,17 @@ STATS_AS_OF = "2026-10-29"
 STATS: Dict[Tuple[str, str], Dict[str, object]] = {
     # ---- 建仓：按位置分档（现价 ≥¥100，tools/probe_net_winrate.py）----
     # 「求购价未抬」= 求购量涨但最高求购价没动 —— 求购单不锁资金,这种堆积零成本,所以没有增量。
-    ("accum", "低位"): {"n": 4579, "up": 32.8, "med": -1.89, "crash": None,
+    ("accum", "低位"): {"n": 4579, "n_items": 429, "up": 32.8, "med": -1.89, "crash": None,
                         "tier": "≥¥100", "base_up": 31.6, "base_n": 57264,
                         "up_24h": 36.5, "med_24h": -0.13, "base_up_24h": 34.3, "n_24h": 6453,
                         "win_net_7d": 15.6, "win_net_24h": 13.5,
                         "base_win_7d": 13.5, "base_win_24h": 9.6, "net_med_7d": -4.34},
-    ("accum", "中位"): {"n": 2185, "up": 12.3, "med": -4.39, "crash": None,
+    ("accum", "中位"): {"n": 2185, "n_items": 375, "up": 12.3, "med": -4.39, "crash": None,
                         "tier": "≥¥100", "base_up": 11.3, "base_n": 27768,
                         "up_24h": 21.7, "med_24h": -0.63, "base_up_24h": 22.9, "n_24h": 3241,
                         "win_net_7d": 3.4, "win_net_24h": 3.3,
                         "base_win_7d": 2.7, "base_win_24h": 3.1, "net_med_7d": -6.78},
-    ("accum", "高位"): {"n": 830, "up": 5.9, "med": -5.79, "crash": None,
+    ("accum", "高位"): {"n": 830, "n_items": 256, "up": 5.9, "med": -5.79, "crash": None,
                         "tier": "≥¥100", "base_up": 4.5, "base_n": 9248,
                         "up_24h": 18.1, "med_24h": -0.38, "base_up_24h": 17.5, "n_24h": 929,
                         "win_net_7d": 2.5, "win_net_24h": 3.9,
@@ -71,17 +71,17 @@ STATS: Dict[Tuple[str, str], Dict[str, object]] = {
     # ---- 建仓 + 求购价上移 ≥3%（「抬价收货」：庄家愿意多付,卖家还在让价）----
     # 整套信号里唯一在低位有明显增量的子形态：上涨率 +8.1pp、**扣费胜率 +6.6pp(20.1% vs 13.5%)**。
     # 但中位净收益仍是 -3.69%，是「赢面变大」不是「正期望」。
-    ("accum+lift", "低位"): {"n": 393, "up": 39.7, "med": -1.22, "crash": None,
+    ("accum+lift", "低位"): {"n": 393, "n_items": 213, "up": 39.7, "med": -1.22, "crash": None,
                              "tier": "≥¥100", "base_up": 31.6, "base_n": 57264,
                              "up_24h": 44.7, "med_24h": 0.00, "base_up_24h": 34.3, "n_24h": 512,
                              "win_net_7d": 20.1, "win_net_24h": 28.3,
                              "base_win_7d": 13.5, "base_win_24h": 9.6, "net_med_7d": -3.69},
-    ("accum+lift", "中位"): {"n": 108, "up": 14.8, "med": -4.28, "crash": None,
+    ("accum+lift", "中位"): {"n": 108, "n_items": 76, "up": 14.8, "med": -4.28, "crash": None,
                              "tier": "≥¥100", "base_up": 11.3, "base_n": 27768,
                              "up_24h": 24.6, "med_24h": -0.72, "base_up_24h": 22.9, "n_24h": 142,
                              "win_net_7d": 9.3, "win_net_24h": 12.7,
                              "base_win_7d": 2.7, "base_win_24h": 3.1, "net_med_7d": -6.67},
-    ("accum+lift", "高位"): {"n": 50, "up": 12.0, "med": -7.55, "crash": None,
+    ("accum+lift", "高位"): {"n": 50, "n_items": 40, "up": 12.0, "med": -7.55, "crash": None,
                              "tier": "≥¥100", "base_up": 4.5, "base_n": 9248,
                              "up_24h": 16.4, "med_24h": -0.96, "base_up_24h": 17.5, "n_24h": 61,
                              "win_net_7d": 4.0, "win_net_24h": 4.9,
@@ -89,14 +89,14 @@ STATS: Dict[Tuple[str, str], Dict[str, object]] = {
     # ---- 启动：追涨指纹。24 小时有效、7 天衰减（这不是「负」而是「短命」）----
     # T+24h 上涨 44.2% vs 基准 29.3%、扣费胜率 31.9% vs 7.0%（全部信号里最高的 24h 胜率）；
     # T+7 掉到 上涨 24.8%、扣费胜率 9.5%（基准 9.2%）—— 7 天持有等于把优势耗光。
-    ("launch", "*"): {"n": 105, "up": 24.8, "med": -3.18, "crash": None,
+    ("launch", "*"): {"n": 105, "n_items": 90, "up": 24.8, "med": -3.18, "crash": None,
                       "tier": "≥¥100", "base_up": 23.0, "base_n": 94280,
                       "up_24h": 44.2, "med_24h": -0.01, "base_up_24h": 29.3, "n_24h": 138,
-                      "win_net_7d": 9.5, "win_net_24h": 31.9,
+                      "win_net_7d": 9.5, "win_net_24h": 31.9, "show_24h": True,
                       "base_win_7d": 9.2, "base_win_24h": 7.0, "net_med_7d": -5.60},
     # ---- 派发：唯一在可交易品上依然强有效的方向信号（现价 ≥¥100）----
     # T+24h 上涨 13.2% vs 基准 29.3%；T+7 上涨 3.2%、**扣费胜率 0.0%**（n=31，31 个样本里没有一个扣费后为正）。
-    ("distribute", "*"): {"n": 31, "up": 3.2, "med": -10.90, "crash": None,
+    ("distribute", "*"): {"n": 31, "n_items": 26, "up": 3.2, "med": -10.90, "crash": None,
                           "tier": "≥¥100", "base_up": 23.0, "base_n": 94280,
                           "up_24h": 13.2, "med_24h": -3.33, "base_up_24h": 29.3, "n_24h": 38,
                           "win_net_7d": 0.0, "win_net_24h": 13.2,
@@ -316,24 +316,31 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
     up = float(st["up"])
     med = float(st["med"])
     base_up = st.get("base_up")
-    lines = [f"　{scope_txt}（现价 {tier}）{n:,} 例"]
+    n_items = st.get("n_items")
+    # 事件数远大于独立品数时（同一个品被重复采样），必须把两个数都写出来 ——
+    # 「393 例」听起来像 393 个机会，实际只是 213 个品。
+    _sample = (f"{n:,} 次（{int(n_items):,} 个品）" if n_items and int(n_items) < n
+               else f"{n:,} 例")
+    lines = [f"　{scope_txt}（现价 {tier}）{_sample}"]
 
-    # ---- 扣费胜率：真正能落袋的概率，带同位置基准做参照 ----
+    # ---- 扣费后赚钱概率：真正能落袋的概率，带同位置基准做参照 ----
+    # 24h 只在「持有周期本来就是 24 小时」的阶段（启动）才印，其余只给 T+7。
     w7, w24 = st.get("win_net_7d"), st.get("win_net_24h")
     bw7, bw24 = st.get("base_win_7d"), st.get("base_win_24h")
     if w7 is not None:
+        _show24 = bool(st.get("show_24h")) and w24 is not None
         _w = []
-        if w24 is not None:
+        if _show24:
             _w.append(f"T+24h {float(w24):.1f}%")
         _w.append(f"T+7 {float(w7):.1f}%")
         _base = ""
         if bw7 is not None:
             _where = "同位置基准" if by_position else "全市场基准"
-            if bw24 is not None:
+            if _show24 and bw24 is not None:
                 _base = f"（{_where} {float(bw24):.1f}% / {float(bw7):.1f}%）"
             else:
                 _base = f"（{_where} {float(bw7):.1f}%）"
-        lines.append(f"　扣费后赚钱概率 " + "、".join(_w) + _base)
+        lines.append(f"　扣去手续费后赚钱概率 " + "、".join(_w) + _base)
 
     # ---- 上涨率 / 典型涨跌：不用「中位」这种统计黑话，直接说典型情况 ----
     net_med = st.get("net_med_7d")
