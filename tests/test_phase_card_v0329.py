@@ -229,14 +229,13 @@ def test_bid_lift():
         txt = "\n".join(sig.reading)
         check("判读点明「抬价收货」", "抬价收货" in txt, txt)
         check("判读写明求购价上移幅度", "上移" in txt, txt)
-        check("统计用抬价组(上涨39.7%/扣费胜率20.1%)",
-              "39.7" in txt and "20.1" in txt, txt)
-        check("统计带扣去手续费后赚钱概率", "扣去手续费后赚钱概率" in txt and "2.56" in txt, txt)
+        check("统计用抬价组扣费后胜率 20.1%", "20.1" in txt, txt)
+        check("统计带扣去手续费后胜率", "扣去手续费后胜率" in txt and "2.56" in txt, txt)
         check("不印 T+24h（建仓按 7 天持有看）", "T+24h" not in txt, txt)
-        # 三个概念各占一行、各自带标签：上涨率(概率)、扣费后赚钱概率(概率)、典型涨跌(幅度)
-        check("上涨率单独一行带标签", "上涨率　39.7%" in txt, txt)
+        # 只留两行：胜率(概率) 与 典型涨跌(幅度)，都自带标签
         check("典型涨跌单独一行带标签", "典型涨跌　-1.22%" in txt, txt)
-        check("说明「涨 0.1% 也算涨」", "涨 0.1% 也算涨" in txt, txt)
+        check("不再印上涨率（与胜率重复）", "上涨率" not in txt, txt)
+        check("结论依据改用胜率", "胜率较基准" in txt, txt)
         check("不用「中位」这种统计黑话", "中位" not in txt, txt)
         check("低位不再堆重复尾注", phase_rules.footer("accum+lift", "低位") == "")
         check("盘中行显示求购价上移", any("上移" in ln for ln in sig.lines),
@@ -247,7 +246,8 @@ def test_bid_lift():
     if sig_flat:
         txt2 = "\n".join(sig_flat.reading)
         check("未抬价版不讲抬价", "抬价收货" not in txt2, txt2)
-        check("未抬价版统计用 32.8%", "32.8" in txt2, txt2)
+        check("未抬价版统计用堆量组胜率 15.6%",
+              "扣去手续费后胜率　T+7 15.6%" in txt2, txt2)
         check("两种版本结论不同", txt2 != "\n".join(sig.reading) if sig else False)
 
 

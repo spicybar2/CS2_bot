@@ -313,9 +313,9 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
             return [f"　本形态统计仅覆盖现价 {tier} 的品，当前价 ¥{price:,.0f} 不在统计范围内。"]
 
     n = int(st["n"])
-    up = float(st["up"])
     med = float(st["med"])
-    base_up = st.get("base_up")
+    # 注：STATS 里的 up / base_up（上涨率）不再上卡，只留作原始测量数据；
+    # 卡片上的结论一律由「胜率」推出，读者不必再自己做减法。
     n_items = st.get("n_items")
     # 事件数远大于独立品数时（同一个品被重复采样），必须把两个数都写出来 ——
     # 「393 例」听起来像 393 个机会，实际只是 213 个品。
@@ -324,17 +324,11 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
     lines = [f"　{scope_txt}（现价 {tier}）{_sample}"]
 
     # 24h 只在「持有周期本来就是 24 小时」的阶段（启动）才印，其余只给 T+7。
-    # 每个数单独一行、带自己的标签 —— 之前把「上涨率 / 幅度 / 扣费后幅度」挤在一行里，
-    # 老大直接问「这是上涨率还是幅度还是胜率」，说明混排就是读不懂。
+    # 2026-10-29 老大砍掉「上涨率」行：它和胜率是两个数（启动 44.2% vs 31.9%），
+    # 差额全来自「涨 0.1% 也算赢」，对做决定没有额外价值，留着反而要读者自己相减。
     _show24 = bool(st.get("show_24h")) and st.get("up_24h") is not None
 
-    # 1) 上涨率：价格比今天高的比例（涨 0.1% 也算），是「方向」不是「赚没赚」
-    if _show24:
-        lines.append(f"　上涨率　T+24h {float(st['up_24h']):.1f}%｜T+7 {up:.1f}%（涨 0.1% 也算涨）")
-    else:
-        lines.append(f"　上涨率　{up:.1f}%（涨 0.1% 也算涨）")
-
-    # 2) 扣费后赚钱概率：涨过手续费门槛才算，是「赚没赚」
+    # 1) 扣去手续费后胜率：涨过手续费门槛才算赢，是「赚没赚」
     w7, w24 = st.get("win_net_7d"), st.get("win_net_24h")
     bw7, bw24 = st.get("base_win_7d"), st.get("base_win_24h")
     if w7 is not None:
@@ -349,9 +343,9 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
                 _base = f"（{_where} {float(bw24):.1f}% / {float(bw7):.1f}%）"
             else:
                 _base = f"（{_where} {float(bw7):.1f}%）"
-        lines.append(f"　扣去手续费后赚钱概率　" + "｜".join(_w) + _base)
+        lines.append(f"　扣去手续费后胜率　" + "｜".join(_w) + _base)
 
-    # 3) 典型涨跌：排正中间那次的幅度（不是概率），并列扣费后的同一数字
+    # 2) 典型涨跌：排正中间那次的幅度（不是概率），并列扣费后的同一数字
     net_med = st.get("net_med_7d")
     tail = f"（扣费后 {float(net_med):+.2f}%）" if net_med is not None else ""
     if _show24:
@@ -359,27 +353,25 @@ def stat_lines(phase: str, position: str, price: Optional[float]) -> List[str]:
     else:
         lines.append(f"　典型涨跌　{med:+.2f}%{tail}")
 
-    # ---- 结论：由「相对基准的增量」和「扣费后正负」共同决定，不写死 ----
-    if base_up is not None:
-        delta = up - float(base_up)
-        # 24 小时优势远大于 7 日时（启动就是这样），必须点出来，
-        # 否则「7 日仅 +1.8pp」会被读成「这信号没用」，而它其实是个 24h 信号。
-        d24 = None
-        if st.get("up_24h") is not None and st.get("base_up_24h") is not None:
-            d24 = float(st["up_24h"]) - float(st["base_up_24h"])
-        if d24 is not None and d24 >= 5.0 and abs(delta) < 3.0:
-            # 7 日看不出增量、但 24h 有明显增量（启动就是这样）：
-            # 不点出这一句，「7 日仅 +1.8pp」会被读成「这信号没用」。
-            judge = (f"7 日上涨率较基准 {float(base_up):.1f}% 仅 {delta:+.1f}pp，"
+    # ---- 结论：用「胜率相对基准的增量」来说话 ----
+    # 必须拿卡片上印得出的数当依据（胜率），不能引用已被删掉的上涨率，
+    # 否则读者会去卡上找一个不存在的数字。
+    if w7 is not None and bw7 is not None:
+        d7 = float(w7) - float(bw7)
+        d24 = (float(w24) - float(bw24)
+               if (w24 is not None and bw24 is not None) else None)
+        if _show24 and d24 is not None and d24 >= 5.0:
+            # 启动：7 日与基准持平，优势全在 24 小时内，必须点出来。
+            judge = (f"7 日胜率 {float(w7):.1f}% 与基准 {float(bw7):.1f}% 相近，"
                      f"但 24h 高 {d24:.1f}pp")
-        elif delta >= 3.0:
-            judge = f"上涨率较基准 {float(base_up):.1f}% 高 {abs(delta):.1f}pp"
-        elif delta <= -3.0:
-            judge = f"上涨率较基准 {float(base_up):.1f}% 低 {abs(delta):.1f}pp"
+        elif d7 >= 3.0:
+            judge = f"胜率较基准 {float(bw7):.1f}% 高 {abs(d7):.1f}pp"
+        elif d7 <= -3.0:
+            judge = f"胜率较基准 {float(bw7):.1f}% 低 {abs(d7):.1f}pp"
         else:
-            judge = f"上涨率较基准 {float(base_up):.1f}% 仅 {delta:+.1f}pp，无显著差异"
-        if w7 is not None and med < 0:
-            # 即使胜率更高，只要中位为负，就必须说清「不是正期望」，别让读者以为能稳赚。
+            judge = f"胜率较基准 {float(bw7):.1f}% 仅差 {d7:.1f}pp，无显著差异"
+        if med < 0:
+            # 即使胜率更高，只要典型涨跌为负，就必须说清「不是正期望」，别让读者以为能稳赚。
             lines.append(f"　结论：{judge}；涨不过 +{BREAKEVEN_PCT:.2f}% 就是亏，仍非正期望")
         else:
             lines.append(f"　结论：{judge}")
