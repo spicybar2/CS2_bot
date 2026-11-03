@@ -229,11 +229,11 @@ def test_bid_lift():
         txt = "\n".join(sig.reading)
         check("判读点明「抬价收货」", "抬价收货" in txt, txt)
         check("判读写明求购价上移幅度", "上移" in txt, txt)
-        check("统计用抬价组扣费后胜率 20.1%", "20.1" in txt, txt)
+        check("统计用抬价组扣费后胜率 18.1%", "18.1" in txt, txt)
         check("统计带扣去手续费后胜率", "扣去手续费后胜率" in txt and "2.56" in txt, txt)
         check("不印 T+24h（建仓按 7 天持有看）", "T+24h" not in txt, txt)
         # 只留两行：胜率(概率) 与 典型涨跌(幅度)，都自带标签
-        check("典型涨跌单独一行带标签", "典型涨跌　-1.22%" in txt, txt)
+        check("典型涨跌单独一行带标签", "典型涨跌　-0.96%" in txt, txt)
         check("不再印上涨率（与胜率重复）", "上涨率" not in txt, txt)
         check("结论依据改用胜率", "胜率较基准" in txt, txt)
         check("不用「中位」这种统计黑话", "中位" not in txt, txt)
@@ -247,7 +247,7 @@ def test_bid_lift():
         txt2 = "\n".join(sig_flat.reading)
         check("未抬价版不讲抬价", "抬价收货" not in txt2, txt2)
         check("未抬价版统计用堆量组胜率 15.6%",
-              "扣去手续费后胜率　T+7 15.6%" in txt2, txt2)
+              "扣去手续费后胜率　T+7 15.4%" in txt2, txt2)
         check("两种版本结论不同", txt2 != "\n".join(sig.reading) if sig else False)
 
 

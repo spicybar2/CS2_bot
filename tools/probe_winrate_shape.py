@@ -112,8 +112,8 @@ def main() -> None:
             bar = "█" * max(1, round(k / n * 40))
             print(f"    {label:<20}{k:>5} 例 {k / n * 100:>5.1f}%  {bar}")
 
-    show("低位 + 抬价收货（卡上那 393 例）", lift, lift_gids)
-    show("低位任意时刻（基准）", base, base_gids)
+    show("低位 + 抬价收货（卡上那组）", lift, lift_gids)
+    show("全体任意时刻（基准）", base, base_gids)
 
     # 同一个品重复出现的程度：事件数远大于独立品数时，样本独立性差，结论要打折
     print("\n=== 各信号组「事件数 vs 独立品数」（判断样本独立性） ===")
