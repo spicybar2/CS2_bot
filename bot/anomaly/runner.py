@@ -1043,6 +1043,8 @@ async def _persist_events(cfg: AnomalyConfig, store: SnapshotStore,
             "score": r.score,
             "pool": tag,
             "price": float(d.get("price") or 0),
+            # V0.3.38:启动触发前的售价(其余阶段为 0),卡片据此显示「¥旧 → ¥现」
+            "price_from": float(d.get("price_from") or 0),
             "price_change_5m": d.get("price_change_5m") or 0,
             "price_change_30m": d.get("price_change_30m") or 0,
             # V0.2.29 口径修正:price_change_1d 只写**真实近1日**涨跌(榜单无该字段时写 NULL,

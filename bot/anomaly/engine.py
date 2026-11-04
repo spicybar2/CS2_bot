@@ -756,6 +756,10 @@ class AnomalyEngine:
                 "reading": phase_sig.reading,
                 "pos_pct": phase_sig.pos_pct,
             }
+            # V0.3.38:启动卡要显示「¥旧 → ¥现」。必须放在 details **顶层**
+            # (runner 用 d.get("price_from") 取,和 d.get("price") 同一个平面)。
+            if phase_sig.price_from:
+                details["price_from"] = phase_sig.price_from
             # V0.3.29:阶段事件的位置用**区间分位**判定(低位/中位/高位),覆盖引擎原先
             # 按「涨跌幅 ±8%」算的同名口径 —— 后者把「涨过又跌回来」误判成高位。
             if phase_sig.position:

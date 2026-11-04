@@ -196,6 +196,7 @@ class PhaseSignal:
     lines: List[str] = field(default_factory=list)   # 推送文案的窗口盘口对比块
     position: str = ""               # 低位 / 中位 / 高位(近 N 日区间分位分档)
     pos_pct: Optional[float] = None  # 区间分位 0~100(缺失为 None)
+    price_from: Optional[float] = None  # V0.3.38:触发前的售价(启动用),卡片显示「¥旧 → ¥现」
     reading: List[str] = field(default_factory=list)  # 判读 + 历史参照(整段文案)
 
 
@@ -351,6 +352,8 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
             reason = (f"求购价上移 {bp_chg60:+.1f}%,价格跟涨 {price_chg_60:+.1f}%"
                       f"(无吸筹期记录,疑似消息/事件驱动,持续性存疑)")
         _icon, _title = phase_rules.headline("launch", position)
+        # V0.3.38:启动卡只写「现价」看不出涨了多少,补上 60 分钟前的售价 → 「¥1203 → ¥1285」。
+        _pf = float(p60.price or 0) if p60 else 0.0
         return PhaseSignal(
             phase="launch", title=_title, icon=_icon,
             floor_score=cfg.phase_score_launch,
@@ -358,6 +361,7 @@ def detect_phase(snap: MetricSnapshot, history: Sequence[HistoryPoint],
                      f"逐段走高确认(求购价与价格窗口内未回落),在售 {sell_chg60:+.1f}% 未暴增"
                      if sell_chg60 is not None else "逐段走高确认(求购价与价格窗口内未回落)"],
             lines=book_lines, position=position, pos_pct=pos_pct,
+            price_from=(_pf if _pf > 0 else None),
             reading=_build_reading("launch", position, pos_pct, buy_chg60,
                                    sell_chg60, price_chg_60, sell_now, buy_now,
                                    window_points, snap.price,

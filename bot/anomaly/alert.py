@@ -210,11 +210,28 @@ def _format_phase_alert(r: Dict[str, Any], market: Optional[str] = None,
         pos = ''            # 旧事件没有位置:标题与尾注回退到最保守的中位口径
     icon, title = phase_rules.headline(ptype, pos or '中位')
     price = float(r.get('price') or 0)
+    # V0.3.38:启动卡原来只贴当时的售价,看不出「这一步涨了多少」。
+    # 有触发前售价(price_from,由 detect_phase 取 60 分钟前那一跳)就显示「¥旧 → ¥现(+x%)」,
+    # 没有(建仓/派发,或旧事件)保持原来的「现价 ¥x」。
+    price_from = float(r.get('price_from') or 0)
+    if ptype == "launch" and price_from > 0 and price > 0 and abs(price - price_from) >= 0.01:
+        # 涨幅必须由**印出来的两个数**算,否则会出现「¥100 → ¥102（+2.5%）」这种
+        # 读者一算就对不上的行(0 位小数把 102.5 印成 102)。四舍五入后两数相同
+        # (小额品小幅波动)则改用 2 位小数,保证永远自洽。
+        _pf, _p = round(price_from), round(price)
+        if _pf != _p:
+            _chg = (_p / _pf - 1.0) * 100.0
+            _price_line = f"价格 ¥{_pf:,.0f} → ¥{_p:,.0f}（{_chg:+.1f}%）"
+        else:
+            _chg = (price / price_from - 1.0) * 100.0
+            _price_line = f"价格 ¥{price_from:,.2f} → ¥{price:,.2f}（{_chg:+.2f}%）"
+    else:
+        _price_line = f"现价 ¥{price:,.0f}"
     lines = [
         f"{icon} {title}",
         '',
         r.get('name') or '',
-        f"现价 ¥{price:,.0f}",
+        _price_line,
         '━━━━━━━━━━━━━━',
     ]
     block = str(r.get('reason') or '').strip()

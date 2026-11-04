@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS anomaly_events (
     score REAL DEFAULT 0,
     pool TEXT,
     price REAL DEFAULT 0,
+    price_from REAL DEFAULT 0,
     price_change_5m REAL DEFAULT 0,
     price_change_30m REAL DEFAULT 0,
     price_change_1d REAL DEFAULT 0,
@@ -343,6 +344,7 @@ class SnapshotStore:
                 ("score", "REAL DEFAULT 0"),
                 ("pool", "TEXT"),
                 ("price", "REAL DEFAULT 0"),
+                ("price_from", "REAL DEFAULT 0"),   # V0.3.38:启动触发前的售价(卡片显示「¥旧 → ¥现」)
                 ("price_change_5m", "REAL DEFAULT 0"),
                 ("price_change_30m", "REAL DEFAULT 0"),
                 ("price_change_1d", "REAL DEFAULT 0"),
@@ -963,6 +965,7 @@ class SnapshotStore:
     # sqlite3 命名参数绑定缺键会抛 ProgrammingError,故在此统一补全
     _ANOMALY_DEFAULTS: Dict[str, Any] = {
         "score": 0.0, "pool": "", "price": 0.0,
+        "price_from": 0.0,
         "price_change_5m": 0.0, "price_change_30m": 0.0, "price_change_1d": 0.0,
         "rate_7": 0.0,
         "buy_change": 0.0, "sell_change": 0.0, "position": "", "reason": "",
@@ -988,7 +991,7 @@ class SnapshotStore:
                 """INSERT INTO anomaly_events
                    (good_id, name, anomaly_type, drop_pct, abs_drop, window_min,
                     sell_prev, sell_cur, level, detail, ts,
-                    score, pool, price, price_change_5m, price_change_30m, price_change_1d,
+                    score, pool, price, price_from, price_change_5m, price_change_30m, price_change_1d,
                     rate_7,
                     buy_change, sell_change, position, reason,
                     transaction_volume, transaction_avg_price, transaction_period_at,
@@ -996,7 +999,7 @@ class SnapshotStore:
                     push_status, push_detail)
                    VALUES (:good_id, :name, :anomaly_type, :drop_pct, :abs_drop, :window_min,
                            :sell_prev, :sell_cur, :level, :detail, :ts,
-                           :score, :pool, :price, :price_change_5m, :price_change_30m,
+                           :score, :pool, :price, :price_from, :price_change_5m, :price_change_30m,
                            :price_change_1d, :rate_7,
                            :buy_change, :sell_change, :position, :reason,
                            :transaction_volume, :transaction_avg_price, :transaction_period_at,
