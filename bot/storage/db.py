@@ -283,8 +283,11 @@ CREATE INDEX IF NOT EXISTS idx_outcome_ts ON signal_outcomes (event_ts);
 class SnapshotStore:
     """价格快照存储（线程安全，异步调用方用 to_thread 包装）。"""
 
-    def __init__(self, db_path: str = "data/csqaq.db"):
+    def __init__(self, db_path: str = "data/csqaq.db", history_retention_days: int = 45):
         self._db_path = db_path
+        # V0.3.37:保留天数原硬编码 30 天。T+7 前瞻统计需要 37 天以上的原始序列,
+        # 30 天会把窗口最前面一周的样本吃掉,也让区间分位长期被截断(样本每周漂 10%)。
+        self._retention_days = max(7, int(history_retention_days or 45))
         self._lock = threading.Lock()
         self._init_db()
 
@@ -945,10 +948,11 @@ class SnapshotStore:
                            :total_buy_price_scope)""",
                 rows,
             )
-            # 滚动清理: 仅保留近 30 天,控制表体积
+            # 滚动清理: 保留近 N 天(V0.3.37:30→可配置,默认 45),控制表体积
             conn.execute(
                 "DELETE FROM item_listing_history WHERE ts < "
-                "datetime('now','localtime','-30 days')"
+                "datetime('now','localtime',?)",
+                (f"-{self._retention_days} days",),
             )
             conn.commit()
 

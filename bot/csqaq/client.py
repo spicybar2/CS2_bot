@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """CSQAQ 数据开放 API 客户端。
 
 官方文档: https://docs.csqaq.com
@@ -32,6 +32,39 @@ _REBIND_SUCCESS_COOLDOWN: float = 120.0   # 成功后的常规冷却:防 30s 内
 _TIMEOUT_REBIND_MIN_GAP: float = 300.0    # V0.3.19 35→300:钉 IP 后出口恒定,超时基本不再是"漂移",
                                           # 若还频繁超时说明是别的问题,不该每 35 秒重绑一次制造风暴
 _TIMEOUT_REBIND_LAST: float = 0.0         # 上次"超时触发"的重绑**完成**时刻(单飞+限频用)
+# V0.3.37:超时不再触发重绑,只累计次数;连续这么多次才判定"钉的节点真挂了"并换钉(不动白名单)。
+_TIMEOUT_ROTATE_STREAK: int = 5
+_TIMEOUT_STREAK: int = 0
+
+
+def reset_timeout_streak() -> None:
+    """请求成功一次就清零连续超时计数(V0.3.37)。"""
+    global _TIMEOUT_STREAK
+    _TIMEOUT_STREAK = 0
+
+
+def timeout_state() -> Dict[str, Any]:
+    return {"streak": _TIMEOUT_STREAK, "limit": _TIMEOUT_ROTATE_STREAK}
+
+
+async def note_timeout(cfg: Optional["CSQAQConfig"], source: str = "") -> None:
+    """V0.3.37:连续超时到阈值 → 换钉(只换服务器 IP,绝不改白名单)。
+
+    为什么不再重绑:2026-11-04 复盘,出口已改成「按目标 IP 分流」,白名单(fixed IP)只对应
+    钉住的那一条路,超时只是那个节点偶尔犯卡。11-03 16:00~11-04 10:00 的 15 次重绑全部
+    来自超时,且 15 次都绑回同一个 IP —— 纯空转;更坏的情况是 bind 请求自己也要挑一条 WAN
+    出去,万一走到别的出口,白名单就被改坏了(那才是真的制造 401)。
+    """
+    global _TIMEOUT_STREAK
+    if cfg is None:
+        return
+    _TIMEOUT_STREAK += 1
+    if _TIMEOUT_STREAK < _TIMEOUT_ROTATE_STREAK:
+        return
+    _TIMEOUT_STREAK = 0
+    logger.warning("[csqaq.pin] 连续 %d 次超时(%s),判定钉的入口卡死,换钉",
+                   _TIMEOUT_ROTATE_STREAK, source or "-")
+    await note_pin_failure(cfg)
 
 
 def _rebind_fail_backoff(cooldown_cap: float) -> float:
@@ -619,8 +652,10 @@ async def note_pin_failure(cfg: Optional[CSQAQConfig]) -> None:
         # 限频/超时下探测不明确 → 保留当前钉的 IP,别把好好的选择丢掉
         logger.warning("[csqaq.pin] 换钉探测不明确(限频/超时),先保留 %s", old)
         return
-    _PIN_IP = None
-    logger.warning("[csqaq.pin] 候选全部失败,暂时退回系统 DNS(下次重选)")
+    # V0.3.37:候选全 401 时**不再清空 pin**。
+    # 出口已改成「按目标 IP 分流」,清空 pin = 让 5 个入口轮着出去,必然重新制造 401 风暴;
+    # 钉着一个"探测不通"的入口,至少出口是确定的,还能靠重试熬过节点的间歇性卡顿。
+    logger.warning("[csqaq.pin] 候选全部不通(401),保留当前 %s —— 退回系统 DNS 只会制造 401", old)
 
 # V0.3.9:全局限速(跨实例共享)。
 # 实测(2026-09-28 16:00-16:12):8 个任务同时启动的那一分钟出现 **30 次 429**,而随后
@@ -893,6 +928,7 @@ class CSQAQClient:
                                 data = {}
                             if isinstance(data, dict) and data.get("code") == 200:
                                 reset_pin_streak()      # V0.3.19:成功即清零连续失败计数
+                                reset_timeout_streak()  # V0.3.37:成功即清零连续超时计数
                                 note_rate_ok()          # V0.3.21:成功即解除 429 惩罚
                                 return data
                             logger.warning("[csqaq] 接口返回异常: %s", data)
@@ -904,21 +940,13 @@ class CSQAQClient:
                 # 拿它换钉会让两个健康节点被来回摆(12:13 日志里 159→119→159 就是这么来的)。
                 if isinstance(exc, aiohttp.ClientConnectorError):
                     await note_pin_failure(self._cfg)
-                # V0.3.9:超时/连接错**先怀疑出口 IP 又漂了**,而不是傻等重试。
-                # 实测:落到未绑定 WAN 的请求表现就是"挂到超时"(30s),而超时会杀掉这条唯一的
-                # 连接 → 重连又重赌 WAN,形成 30 秒级的恶性循环。这里改成:立刻单飞重绑
-                # (自带 inflight/冷却/**失败指数退避**三重限频,不会风暴),绑成功就马上重试。
-                # skip_ip_rebind(如 bind 自身)、最后一次尝试则不重绑。
-                if not skip_ip_rebind and attempt < attempts:
-                    rebind_ok, info = await try_rebind_local_ip(
-                        self._cfg, ip_hint=None, source=path,
-                        cooldown_seconds=int(getattr(self._cfg, "rebind_cooldown_seconds", 600)),
-                        # V0.3.15:超时是"连接已确认不可用",不该被 600 秒冷却压着不让重绑
-                        bypass_cooldown=True)
-                    if rebind_ok:
-                        logger.info("[csqaq] 超时后重绑成功,立即重试(%s, attempt %s)", path, attempt)
-                        continue
-                    logger.warning("[csqaq] 超时后重绑未成(%s): %s", path, str(info)[:80])
+                # V0.3.37:超时**不再重绑**。原逻辑(V0.3.9)是"超时就怀疑出口漂了,立刻重绑并重试",
+                # 那是因为当时出口按「目标服务器 IP」恒定,超时≈落到了未绑定的 WAN 上。
+                # 现在白名单只对应钉住的那条路,超时只是节点犯卡(实测 1.14.196.54 会挂 20s),
+                # 重绑既救不了,还可能把 bind 请求自己甩到别的出口、把白名单改坏。
+                # 改为:只累计连续超时,到阈值才换钉(换的是服务器 IP,不是白名单)。
+                if isinstance(exc, asyncio.TimeoutError) and not skip_ip_rebind:
+                    await note_timeout(self._cfg, path)
                 # V0.3.9:最后一次尝试后面没有重试了,不再白睡(实测能省下 4.5s 的死等)
                 if attempt < attempts:
                     await asyncio.sleep(attempt * 1.5)

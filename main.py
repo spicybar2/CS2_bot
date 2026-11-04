@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, Optional
 
 # ---- 日志先行配置：必须在 import botpy 之前 ----
@@ -28,8 +29,13 @@ class _BizOnlyFilter(logging.Filter):
         return record.name == "main" or record.name.startswith("bot.")
 
 
-_file_handler = logging.FileHandler(
-    os.path.join(BASE_DIR, "logs", "bot.log"), encoding="utf-8"
+_file_handler = RotatingFileHandler(
+    os.path.join(BASE_DIR, "logs", "bot.log"),
+    # V0.3.37:原 FileHandler 只增不减,2026-11-04 已达 115MB(两个月),检索日志要翻十几万行。
+    # 改滚动:单文件 20MB、留 5 份,上限 120MB。bot.log 永远是**当前**那份,旧的依次是 .1~.5。
+    maxBytes=20 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
 )
 _file_handler.setFormatter(
     logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -644,7 +650,8 @@ async def amain() -> int:
         logger.error("请参考 config.example.yaml 填写 config.yaml 后重试")
         return 1
 
-    store = SnapshotStore(os.path.join(BASE_DIR, "data", "csqaq.db"))
+    store = SnapshotStore(os.path.join(BASE_DIR, "data", "csqaq.db"),
+                        history_retention_days=cfg.history_retention_days)
     recommender = Recommender(cfg.recommend)
 
     # SteamDT 大盘源客户端:长生命周期,共享给播报/大盘指令/大盘盯盘/健康循环

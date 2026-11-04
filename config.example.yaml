@@ -31,6 +31,10 @@ qq:
     help: ["帮助", "help", "指令"]
 
 # ---- 数据采集调度 ----
+storage:
+  # 行情历史保留天数(V0.3.37)。T+7 前瞻统计需要「30 天回溯算区间分位 + 7 天前瞻」
+  # = 37 天,低于 37 会让窗口最前面一周的样本整段丢失。45 天时库约 3.3GB。
+  history_retention_days: 45
 scheduler:
   # 全量排行数据抓取间隔（分钟）。建议 10-30，避免给 CSQAQ 造成压力
   fetch_interval_minutes: 15

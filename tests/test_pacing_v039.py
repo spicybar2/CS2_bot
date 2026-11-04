@@ -104,7 +104,7 @@ async def main():
     check(f"标记后剩余 {left}s ∈ (40, 46]", 40 < left <= 46)
     cmod._IP_DRIFT_UNTIL = 0.0
 
-    print("\n[3] 超时/连接错 → 立即单飞重绑并重试")
+    print("\n[3] V0.3.37 超时**不再重绑**,只累计连续超时(到阈值换钉)")
     calls = {"n": 0}
 
     async def fake_rebind(cfg_, **kw):
@@ -113,6 +113,7 @@ async def main():
 
     orig_rebind = cmod.try_rebind_local_ip
     cmod.try_rebind_local_ip = fake_rebind
+    cmod.__dict__["_TIMEOUT_STREAK"] = 0
     try:
         cfg3 = CSQAQConfig(api_token="d", request_interval=0.02, retry_times=0)
         cli = cmod.CSQAQClient(cfg3)
@@ -132,14 +133,31 @@ async def main():
             except Exception as exc:
                 err = type(exc).__name__
             dt = time.monotonic() - t0
-            # attempts = retry_times(0) + 3 = 3;每次都超时→每次重绑→最后抛错
             check(f"尝试了 3 次(实际 {sess.calls})", sess.calls == 3)
-            check(f"每次超时都触发重绑(实际 {calls['n']} 次)", calls["n"] >= 2)
+            check(f"超时不再触发重绑(实际 {calls['n']} 次)", calls["n"] == 0)
+            check(f"连续超时计数 = 3(实际 {cmod._TIMEOUT_STREAK})", cmod._TIMEOUT_STREAK == 3)
             check(f"最终抛 RuntimeError(实际 {err})", err == "RuntimeError")
-            check(f"没有退避睡死(耗时 {dt:.2f}s < 3s)", dt < 3.0)
+            check(f"只做温和退避(耗时 {dt:.2f}s < 8s)", dt < 8.0)
 
-            # skip_ip_rebind=True(bind 接口自身)不应触发重绑
-            calls["n"] = 0
+            # 连续 5 次超时 → 判定入口卡死,触发一次换钉(不是重绑)
+            pins = {"n": 0}
+
+            async def fake_pin_failure(cfg_):
+                pins["n"] += 1
+
+            orig_pin = cmod.note_pin_failure
+            cmod.note_pin_failure = fake_pin_failure
+            cmod.__dict__["_TIMEOUT_STREAK"] = 0
+            try:
+                for _ in range(5):
+                    await cmod.note_timeout(cfg3, "/x")
+                check(f"连续 5 次超时换钉 1 次(实际 {pins['n']})", pins["n"] == 1)
+                check(f"计数已清零(实际 {cmod._TIMEOUT_STREAK})", cmod._TIMEOUT_STREAK == 0)
+            finally:
+                cmod.note_pin_failure = orig_pin
+
+            # skip_ip_rebind=True(bind 接口自身)不累计超时
+            cmod.__dict__["_TIMEOUT_STREAK"] = 0
             sess2 = FakeSession()
 
             async def fake_shared2(_cfg=None):
@@ -153,11 +171,13 @@ async def main():
                                  skip_ip_rebind=True)
             except Exception:
                 pass
-            check(f"skip_ip_rebind=True 时不重绑(实际 {calls['n']})", calls["n"] == 0)
+            check(f"skip_ip_rebind=True 时不累计超时(实际 {cmod._TIMEOUT_STREAK})",
+                  cmod._TIMEOUT_STREAK == 0)
         finally:
             cmod.shared_session = orig_shared
     finally:
         cmod.try_rebind_local_ip = orig_rebind
+        cmod.__dict__["_TIMEOUT_STREAK"] = 0
 
     print("\n[4] 既有行为未回归")
     check("401 仍不重试", not cmod.CSQAQClient._is_retryable_status(401))

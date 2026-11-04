@@ -96,8 +96,9 @@ def test_runtime_handlers():
             print("  [SKIP] 子进程未输出 HANDLERS(单例保护或导入失败),跳过运行期断言")
             return
         handlers = line[0].split(":", 1)[1].split(",")
-        check(f"默认 handler = 仅 FileHandler(实际 {handlers})",
-              handlers == ["FileHandler"] or "StreamHandler" not in handlers)
+        check(f"默认 handler = 滚动文件(实际 {handlers})",
+              all(h in ("FileHandler", "RotatingFileHandler") for h in handlers)
+              and "StreamHandler" not in handlers)
     except Exception as exc:  # noqa: BLE001
         print(f"  [SKIP] 运行期断言无法执行: {type(exc).__name__}: {str(exc)[:80]}")
 

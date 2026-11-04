@@ -296,7 +296,7 @@ async def main():
         await C.note_pin_failure(cfg)
     check("120s 内因限频不换 IP", C._PIN_IP == "10.0.0.1", C._PIN_IP)
 
-    # 所有候选都失败 → 退回系统 DNS
+    # 所有候选都失败(401)→ V0.3.37 起保留当前 IP,不再退回系统 DNS
     fresh(tmpdir)
     C._PIN_IP = "10.0.0.1"
     C._PIN_CANDIDATES = ["10.0.0.1", "10.0.0.2"]
@@ -304,7 +304,7 @@ async def main():
     C._PIN_LAST_ROTATE = 0.0
     for _ in range(C._PIN_FAIL_LIMIT):
         await C.note_pin_failure(make_cfg())
-    check("候选全失败 → 退回系统 DNS", C._PIN_IP is None, C._PIN_IP)
+    check("候选全失败 → 保留原 pin(不退回 DNS)", C._PIN_IP == "10.0.0.1", C._PIN_IP)
 
     # 未钉时不该有任何动作
     fresh(tmpdir)

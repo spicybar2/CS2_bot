@@ -32,7 +32,7 @@ def main() -> None:
     rows = c.execute("""select good_id, ts, buff_sell_price, buff_sell_num,
                                buff_buy_num, buff_buy_price
                         from item_listing_history
-                        where ts >= '2026-08-01' and buff_sell_price >= ?
+                        where ts >= datetime('now','localtime','-45 days') and buff_sell_price >= ?
                           and buff_buy_price > 0
                         order by good_id, ts""", (MIN_PRICE,)).fetchall()
     c.close()

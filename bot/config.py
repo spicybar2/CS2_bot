@@ -402,6 +402,9 @@ class AppConfig:
     anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
     fees: FeeConfig = field(default_factory=FeeConfig)
     notify_group_openid: str = ""   # 通知群:IP漂移提醒等主动推送只发这个群(留空则发所有已知群)
+    # V0.3.37:行情历史保留天数。原硬编码 30 天,但 T+7 前瞻统计需要「30 天回溯 + 7 天前瞻」
+    # = 37 天,30 天会吃掉最早一周的样本,还会让区间分位被截断;提到 45 天(库约 3.3GB)。
+    history_retention_days: int = 45
     admin_user_openids: List[str] = field(default_factory=list)      # 私聊发公告的管理员白名单
     announce_groups: Dict[str, str] = field(default_factory=dict)    # 公告目标群: 群号/别名 -> group_openid
 
@@ -481,6 +484,12 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         cfg.llm.history_len = int(c.get("history_len", cfg.llm.history_len))
         cfg.llm.history_ttl = int(c.get("history_ttl", cfg.llm.history_ttl))
         cfg.llm.route_all_nl = bool(c.get("route_all_nl", cfg.llm.route_all_nl))
+
+    if "storage" in raw:
+        c = raw["storage"]
+        # V0.3.37:历史保留天数(config 化,原 db.py 里硬编码 30 天)
+        cfg.history_retention_days = int(
+            c.get("history_retention_days", cfg.history_retention_days))
 
     if "vip" in raw:
         c = raw["vip"]
