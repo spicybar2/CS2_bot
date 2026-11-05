@@ -82,6 +82,11 @@ def main():
     cli_src = (ROOT / "bot" / "csqaq" / "client.py").read_text(encoding="utf-8")
     check("超时分支改为累计", "await note_timeout(self._cfg, path)" in cli_src)
     check("超时不再走「重绑后重试」老路径", "超时后重绑成功" not in cli_src)
+    # V0.3.40:V0.3.37 只改了 POST,/info/good 与 /current_data 还在 bypass=timeout 重绑
+    check("任何超时路径都不再绕过冷却重绑", "bypass_cooldown=True" not in cli_src)
+    check("三处 GET/POST 都用 note_timeout 累计",
+          cli_src.count("await note_timeout(self._cfg") == 3,
+          cli_src.count("await note_timeout(self._cfg"))
     check("401 仍保留重绑(真漂移要治)", "if status == 401 and not skip_ip_rebind" in cli_src)
     check("候选全失败不再清空 _PIN_IP",
           "_PIN_IP = None\n    logger.warning(\"[csqaq.pin] 候选全部失败" not in cli_src)

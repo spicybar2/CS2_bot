@@ -1108,18 +1108,18 @@ class CSQAQClient:
                         if resp.status == 200:
                             data = json.loads(body)
                             gi = (data.get("data") or {}).get("goods_info") or {}
+                            reset_timeout_streak()   # V0.3.40:成功即清零连续超时
                             return gi or {}
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 last_err = exc
                 logger.warning("[csqaq] GET 请求失败(/info/good): %s (attempt %s)", exc, attempt)
-                # V0.3.10:与 POST 一致 —— 超时/连接错先怀疑漂移,立即单飞重绑
-                if attempt < self._cfg.retry_times + 3:
-                    rebind_ok, info = await try_rebind_local_ip(
-                        self._cfg, ip_hint=None, source="/info/good",
-                        cooldown_seconds=int(getattr(self._cfg, "rebind_cooldown_seconds", 600)),
-                        bypass_cooldown=True)   # V0.3.15:超时路径越过冷却
-                    if rebind_ok:
-                        continue
+                # V0.3.40:与 _post 统一 —— 只有"连不上"才换钉;超时只累计,连续 5 次才换钉。
+                # (V0.3.37 只改了 POST,漏了这里和 /current_data,11-04~11-05 仍在
+                #  bypass=timeout 重绑 3 次,等于老问题没除根。)
+                if isinstance(exc, aiohttp.ClientConnectorError):
+                    await note_pin_failure(self._cfg)
+                if isinstance(exc, asyncio.TimeoutError):
+                    await note_timeout(self._cfg, "/info/good")
                 if attempt < self._cfg.retry_times + 3:
                     await asyncio.sleep(attempt * 1.5)
                 continue
@@ -1236,18 +1236,16 @@ class CSQAQClient:
                         body = await resp.text()
                         status = resp.status
                         if resp.status == 200:
+                            reset_timeout_streak()   # V0.3.40
                             return json.loads(body)
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 last_err = exc
                 logger.warning("[csqaq] GET 请求失败(/current_data): %s (attempt %s)", exc, attempt)
-                # V0.3.10:与 POST 一致 —— 超时/连接错先怀疑漂移,立即单飞重绑
-                if attempt < self._cfg.retry_times + 3:
-                    rebind_ok, _ = await try_rebind_local_ip(
-                        self._cfg, ip_hint=None, source="/current_data",
-                        cooldown_seconds=int(getattr(self._cfg, "rebind_cooldown_seconds", 600)),
-                        bypass_cooldown=True)   # V0.3.15:超时路径越过冷却
-                    if rebind_ok:
-                        continue
+                # V0.3.40:同上 —— 超时不再重绑,只累计
+                if isinstance(exc, aiohttp.ClientConnectorError):
+                    await note_pin_failure(self._cfg)
+                if isinstance(exc, asyncio.TimeoutError):
+                    await note_timeout(self._cfg, "/current_data")
                 if attempt < self._cfg.retry_times + 3:
                     await asyncio.sleep(attempt * 1.5)
                 continue
