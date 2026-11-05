@@ -877,6 +877,62 @@ class SnapshotStore:
                 [(int(r["good_id"]), r["name"], r.get("img") or "", now) for r in rows],
             )
             conn.commit()
+        # V0.3.39:索引变了,归一缓存作废(下次查价重建)
+        self._GOODS_NORM = None
+
+    @staticmethod
+    def _norm_goods_name(s: str) -> str:
+        """品名归一:去掉所有空白、转小写(「AK-47 | 红线」→「ak-47|红线」)。"""
+        return "".join((s or "").split()).lower()
+
+    def _goods_norm_map(self) -> Tuple[Dict[str, str], List[Tuple[str, str]]]:
+        """懒加载的归一化索引:精确表 + (归一, 原名) 列表。
+
+        每次查价重扫 25k 行要 ~50ms,而且是在持锁状态下扫的;建缓存后查价无感,
+        索引更新(save_goods_index)时置空重建。
+        """
+        cache = getattr(self, "_GOODS_NORM", None)
+        if cache is None:
+            with self._lock, self._connect() as conn:
+                rows = conn.execute("SELECT name FROM goods_index").fetchall()
+            exact: Dict[str, str] = {}
+            pairs: List[Tuple[str, str]] = []
+            for (name,) in rows:
+                if not name:
+                    continue
+                n = self._norm_goods_name(name)
+                exact.setdefault(n, name)       # 同名多条时取第一条,行为稳定
+                pairs.append((n, name))
+            cache = (exact, pairs)
+            self._GOODS_NORM = cache
+        return cache
+
+    def resolve_goods_name(self, text: str, min_sub_len: int = 4) -> Optional[str]:
+        """把手打的品名归一到 goods_index 里的规范名(V0.3.39)。
+
+        只认两种命中,**宁可不答也不乱答**:
+        - 精确:归一后完全相同(「手套武器箱」→「手套武器箱」)
+        - 唯一包含:查询串是索引里**恰好一个**名字的子串,且查询串本身 ≥ ``min_sub_len`` 字
+          (「刀」「红」这类短词会命中一堆,直接放弃)
+
+        找不到或命中多个(如「红线」对应多把枪)返回 None,交给上游走 AI / 闲聊。
+        """
+        q = self._norm_goods_name(text)
+        if len(q) < 2:
+            return None
+        exact, pairs = self._goods_norm_map()
+        hit = exact.get(q)
+        if hit:
+            return hit
+        if len(q) >= min_sub_len:
+            subs = [orig for n, orig in pairs if q in n]
+            if len(subs) == 1:
+                return subs[0]
+        return None
+
+    async def async_resolve_goods_name(self, text: str,
+                                       min_sub_len: int = 4) -> Optional[str]:
+        return await asyncio.to_thread(self.resolve_goods_name, text, min_sub_len)
 
     def query_goods_by_keyword(self, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
         """按中文名模糊匹配饰品索引。"""

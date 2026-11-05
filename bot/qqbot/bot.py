@@ -1440,6 +1440,12 @@ class CS2BotClient(botpy.Client):
         m = re.match(r"^(?:帮我|帮忙)?分析(?:一下|下)?\s*(.+)$", raw.strip())
         if m and m.group(1).strip():
             return await self._analysis_reply(m.group(1).strip(), message)
+        # V0.3.39:只发了一个饰品名(「@机器人 手套武器箱」)—— 本地索引能唯一命中就直接回实时价格。
+        # 之前这种消息落到 chat,要么被 AI 闲聊掉、要么回「没有听懂」,而价格其实一直在库里。
+        if cmd == "chat":
+            bare = await self._bare_item_price(raw)
+            if bare is not None:
+                return bare
         # 其余自然语言:AI 优先
         if self._agent and self._agent.enabled:
             if self._cfg.llm.route_all_nl:
@@ -1614,6 +1620,27 @@ class CS2BotClient(botpy.Client):
             result = self._recommender.recommend(rows, strategy)
         fetch_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return cmds.format_recommend(result, fetch_time)
+
+    async def _bare_item_price(self, raw: str) -> Optional[Union[str, Tuple[str, Optional[str]]]]:
+        """裸品名 → 实时价格(V0.3.39)。
+
+        「@倒货波 手套武器箱」这种消息没有任何指令词,原来会落到 chat。
+        这里用本地 goods_index 归一:能唯一命中才查价(一次 CSQAQ API),命中不了就返回 None
+        让上游继续走 AI/闲聊 —— 不猜、不瞎答。
+        """
+        txt = (raw or "").strip()
+        # 超过 24 字多半是句子,不是品名;太短(1 字)根本没法判断
+        if not txt or len(txt) > 24:
+            return None
+        try:
+            name = await self._store.async_resolve_goods_name(txt)
+        except Exception as exc:  # 索引异常绝不能把消息处理打挂
+            logger.warning("[price] 裸品名查询失败: %s", exc)
+            return None
+        if not name:
+            return None
+        logger.info("[price] 裸品名命中: %s → %s", txt, name)
+        return await self._price_reply(name)
 
     async def _price_reply(self, arg: Optional[str]) -> Union[str, Tuple[str, Optional[str]]]:
         keyword = (arg or "").strip()
